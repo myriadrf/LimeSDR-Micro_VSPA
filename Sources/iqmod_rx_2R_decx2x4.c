@@ -28,12 +28,22 @@
 
 vspa_complex_fixed16 input_buffer[RX_NUM_CHAN][RX_NUM_BUF * RX_DMA_TXR_size] __attribute__((section(".ippu_dmem")))
 __attribute__((aligned(64)));
+#ifdef IQMOD_RX_8DDC
+vspa_complex_fixed16 input_dec_intermediate_buffer[RX_NUM_CHAN][RX_NUM_DEC_BUF * (RX_DMA_TXR_size / 4)]
+    __attribute__((section(".ippu_dmem"))) __attribute__((aligned(64)));
+#endif
 vspa_complex_fixed16 input_dec_buffer[RX_NUM_CHAN][RX_NUM_DEC_BUF * (RX_DMA_TXR_size / RX_DECIM)]
     __attribute__((section(".vcpu_dmem"))) __attribute__((aligned(64)));
 
 cfixed16_t filtState[RX_NUM_CHAN][32] __attribute__((section(".ippu_dmem"))) __attribute__((aligned(64)));
+cfixed16_t filtState_dec2[RX_NUM_CHAN][32] __attribute__((section(".ippu_dmem"))) __attribute__((aligned(64)));
+
 int filter_taps_downsampling[8] __attribute__((aligned(64))) = {
 #include "para_files\2xdown_coeff.txt"
+};
+
+int filter_taps_8x_downsampling[8] __attribute__((aligned(64))) = {
+#include "para_files\8xdown_coeff.txt"
 };
 
 t_rx_ch_context rx_ch_context[RX_NUM_CHAN];
@@ -76,8 +86,8 @@ void DDR_write_multi_dma(uint32_t DDR_wr_dma_channel, uint32_t nb_dma, uint32_t 
 }
 
 void rx_qec_correction(vspa_complex_fixed16 *dataIn, vspa_complex_fixed16 *dataOut) {
-    //	if(!DDR_wr_QEC_enable)
-    //		return;
+    // if(!DDR_wr_QEC_enable)
+    //     return;
 
 #ifdef RXIQCOMP2
     txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_rx, MEM_LINE_SIZE);
@@ -99,8 +109,8 @@ void RX_IQ_DATA_TO_DDR(void) {
         DDR_wr_start_bit_update = 1;
         DDR_wr_load_start_bit_update = (HIWORD(msg64)) & 0x00200000;
         DDR_wr_continuous = (HIWORD(msg64)) & 0x00800000;
-        //	    DDR_wr_QEC_enable= (HIWORD(msg64)) & 0x00400000;
-        //	    DDR_wr_CMP_enable =  			(HIWORD(msg64)) & 0x00080000;
+        //      DDR_wr_QEC_enable= (HIWORD(msg64)) & 0x00400000;
+        //      DDR_wr_CMP_enable =             (HIWORD(msg64)) & 0x00080000;
         ddr_wr_dma_ch_nb = ((HIWORD(msg64)) & 0x00070000) >> 16;
         host_flow_control_disable = (HIWORD(msg64)) & 0x00400000;
 
@@ -341,7 +351,7 @@ void PUSH_RX_DATA(void) {
                 rx_empty_size = (RX_NUM_DEC_BUF * RX_DDR_STEP) - rx_busy_size;
                 if (rx_empty_size >= RX_DDR_STEP) {
                     l1_trace(L1_TRACE_L1APP_RX_DEC_START, (uint32_t)rx_ch_context[i].p_rx_dmem_QECed);
-#if defined(IQMOD_RX_1T2R) || defined(IQMOD_RX_1T4R)
+#ifdef IQMOD_RX_1T2R
                     decimator_2x_8_Taps_asm((cfixed16_t *)rx_ch_context[i].p_rx_dmem_output_decimated,
                                             (cfixed16_t *)rx_ch_context[i].p_rx_dmem_input_decimated,
                                             (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState[i], RX_DMA_TXR_size);
@@ -351,6 +361,21 @@ void PUSH_RX_DATA(void) {
                     decimator_2x_8_Taps_asm((cfixed16_t *)rx_ch_context[i].p_rx_dmem_output_decimated,
                                             (cfixed16_t *)rx_ch_context[i].p_rx_dmem_input_decimated,
                                             (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState[i], RX_DMA_TXR_size);
+#endif
+#ifdef IQMOD_RX_4DDC
+                    decimator_4x_8_Taps_asm((cfixed16_t *)rx_ch_context[i].p_rx_dmem_output_decimated,
+                                            (cfixed16_t *)rx_ch_context[i].p_rx_dmem_input_decimated,
+                                            (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState[i], RX_DMA_TXR_size);
+#endif
+#ifdef IQMOD_RX_8DDC
+                    decimator_4x_8_Taps_asm((cfixed16_t *)input_dec_intermediate_buffer[i],
+                                            (cfixed16_t *)rx_ch_context[i].p_rx_dmem_input_decimated,
+                                            (float32_t *)filter_taps_8x_downsampling, (cfixed16_t *)filtState[i], RX_DMA_TXR_size);
+
+                    decimator_2x_8_Taps_asm(
+                        (cfixed16_t *)rx_ch_context[i].p_rx_dmem_output_decimated, (cfixed16_t *)input_dec_intermediate_buffer[i],
+                        (float32_t *)filter_taps_8x_downsampling, (cfixed16_t *)filtState_dec2[i], RX_DMA_TXR_size / 4);
+
 #endif
                     INCR_RX_BUFF(rx_ch_context[i].p_rx_dmem_input_decimated, i);
                     INCR_RX_DEC_BUFF(rx_ch_context[i].p_rx_dmem_output_decimated, i);
