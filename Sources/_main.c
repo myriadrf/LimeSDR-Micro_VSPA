@@ -111,7 +111,7 @@ void VSPA_PROXY_update(void) {
 }
 
 void DDR_write_VSPA_PROXY(uint32_t DDR_wr_dma_channel, uint32_t DDR_address, uint32_t vsp_address, uint32_t size) {
-    uint32_t ctrl = DMAC_WR | DDR_wr_dma_channel;
+    uint32_t ctrl = DMAC_WR | DMAC_TRIG_IRQ | DDR_wr_dma_channel;
     dmac_enable(ctrl, size, DDR_address, vsp_address);
     l1_trace(L1_TRACE_MSG_DMA_XFR, (uint32_t)DDR_address);
     while (dbg_gbl == 4) {
