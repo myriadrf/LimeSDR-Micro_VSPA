@@ -1,0 +1,314 @@
+# SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+# Copyright 2016 - 2025   NXP Semiconductors
+
+#include "vspa.h"
+   .section   .text
+
+// =============================================================================
+//! @file           fftDIF512_hfx_hfx.sx
+//! @brief          512 pt FFT and IFFT functions using DIF   
+//! @author         NXP Semiconductors
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Subroutine name: fftDIF512_hfx_hfx/ifftDIF512_hfx_hfx
+//
+// Subroutines called by this subroutine:
+//    NONE
+//
+// Registers usage:
+//    as registers modified: as6.
+//    g registers modified:  NONE.
+//
+// ASM implementation description:
+//    Data for DIF butterflies is read into VRA. All stages are computed within the VRA 
+//      and final output is shipped off to memory.  
+//
+// Notes:
+//    NONE
+//
+// -----------------------------------------------------------------------------
+   .global  _fftDIF512_hfx_hfx
+   .type   _fftDIF512_hfx_hfx, @function
+_fftDIF512_hfx_hfx:
+#ifndef LIB_FFT_STUB
+	
+	jmp core_fftDIF512_hfx_hfx;
+	set.nco radix2, 1, 8388608;
+   	set.range a0, a2, g0;
+   	
+#else
+	rts;
+   	nop;
+   	nop;
+   	
+#endif // LIB_FFT_STUB
+
+   .size   _fftDIF512_hfx_hfx, .-_fftDIF512_hfx_hfx
+
+//===================================================================================
+   .global  _ifftDIF512_hfx_hfx
+   .type   _ifftDIF512_hfx_hfx, @function
+_ifftDIF512_hfx_hfx:
+#ifndef LIB_FFT_STUB
+
+	jmp core_fftDIF512_hfx_hfx;
+   	.quad ((0x0<<60) | (0x04<<54) | (0x2<<52) | (0x1<<36) | (0x1<<34) | (0x800000<<2))
+   	set.range a0, a2, g0;
+   	
+#else
+	rts;
+   	nop;
+   	nop;
+   	
+#endif // LIB_FFT_STUB
+
+	nop;
+   	rts;
+   	nop;
+   	nop;
+
+   .size   _ifftDIF512_hfx_hfx, .-_ifftDIF512_hfx_hfx
+
+
+// ***************************** CORE FUNCTION *****************************
+   .type   core_fftDIF512_hfx_hfx, @function
+core_fftDIF512_hfx_hfx:
+	ld.laddr [a0]+1;																	clr.VRA ;																		
+	ld.laddr [a0]+7;																	set.VRAincr rS2, 16;																
+	ld.laddr [a0]+1;																	set.VRAincr rS0, 16;
+	ld.laddr [a0]-7;		ld.h2l R0;													set.prec half_fixed, half_fixed, half_fixed, single, half_fixed;
+	setA.VRAptr rS0, 128;	ld.l2h_h2l R0;												set.creg 15, 0xB;
+							ld.h2l R2;													set.VRArange1 rS2, 0, 112;
+							ld.l2h_h2l R2;												set.VRArange1 rS0, 128, 240;																											
+	ld.laddr [a0]+8;						rd S0; nco;	rd S2;							set.Smode S0fftn, S2fftn;
+	ld.laddr [a0]-7;						rd S0; nco;	rd S2;							set.creg 13, 0x1;
+	setA.VRAptr rV, 256;					rd S0; nco;	rd S2;	dif.sau;				setB.VRAptr rSt, 4;				
+							ld.h2l_l2h R0;	rd S0; nco;	rd S2;	dif.sau;				set.VRArange1 rV, 256, 304;
+							ld.h2l_l2h R2;						dif.sau;				set.VRArange2 rV, 384, 432;
+	ld.laddr [a0]+8;						rd S0; nco;	rd S2;	dif.sau;				set.VRAincr rV, 16;
+	ld.laddr [a0]-7;						rd S0; nco;	rd S2;				wr.fftn;	mvB a3, a1;
+											rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	set.range a3, a1, (1024)*UPHW;
+							ld.l2h_h2l R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	set.loop 2, 10;
+							ld.l2h_h2l R2;						dif.sau;	wr.fftn;	set.VRArange1 rSt, 4, 7;
+	ld.laddr [a0]+8;						rd S0; nco;	rd S2;	dif.sau;				set.VRAincr rSt, 1;
+	ld.laddr [a0]-7;						rd S0; nco;	rd S2;				wr.fftn;									loop_begin;
+	st.laddr [a3]+8;						rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-7;		ld.h2l_l2h R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+							ld.h2l_l2h R2;						dif.sau;	wr.fftn;
+	ld.laddr [a0]+8;						rd S0; nco;	rd S2;	dif.sau;
+	ld.laddr [a0]-7;						rd S0; nco;	rd S2;				wr.fftn;
+	st.laddr [a3]+8;						rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-7;		ld.l2h_h2l R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+							ld.l2h_h2l R2;						dif.sau;	wr.fftn;
+	ld.laddr [a0]+8;						rd S0; nco;	rd S2;	dif.sau;												loop_end;
+	ld.laddr [a0]-7;						rd S0; nco;	rd S2;				wr.fftn;
+											rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	set.range a0, a1, (1024)*UPHW;
+	st.laddr [a3]+8;		ld.h2l_l2h R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	mvB a0, a1;
+	st.laddr [a3]-7;		ld.h2l_l2h R2;						dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;						rd S0; nco;	rd S2;	dif.sau; 
+	ld.laddr [a0]-3;						rd S0; nco;	rd S2;			 	wr.fftn;	mv nco_k, 2;
+	st.laddr [a3]+8;						rd S0; nco;	rd S2;	dif.sau; 	wr.fftn;
+	st.laddr [a3]-7;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;		ld.normal R2;		 				dif.sau;	wr.fftn;
+	ld.laddr [a0]-3;			 			rd S0; nco;	rd S2;	dif.sau;												/* group 1, stage 2 begins */
+	st.laddr [a3]+8;		 				rd S0; nco;	rd S2;		 		wr.fftn;
+	st.laddr [a3]-7;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]-3;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+8;		 				rd S0; nco;	rd S2;	dif.sau;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+			 								rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	set.loop 8, 4;
+							ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]-3;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-3;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 1 ends */
+	ld.laddr [a0]-3;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 2 starts */
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-3;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]-3;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-3;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+4;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]-1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	mv nco_k, 4;
+	st.laddr [a3]-3;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group2, stage 2 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group1, stage 3 begins */
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-3;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]-1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-3;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 1 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 2 starts */
+	st.laddr [a3]+4;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]-1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+2;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 2 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 3 starts */
+	st.laddr [a3]+2;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]-1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+2;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+2;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 3 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 4 starts */
+	st.laddr [a3]+2;						rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+2;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	mv nco_k, 8;
+	st.laddr [a3]-1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 4, stage 3 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 1, stage 4 starts */
+	st.laddr [a3]+2;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 1 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 2 starts */
+	st.laddr [a3]+2;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]-1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 2 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 3 starts */
+	st.laddr [a3]+2;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 3 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 4 starts */
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 4 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 5 starts */
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 5 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 6 starts */
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R2;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 6 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 7 starts */
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	ld.laddr [a0]+1;		ld.normal R3;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 7 ends */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;									/* group 8 starts */
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fftn;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	mv nco_k, 16;
+							ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fftn;	set.VRArange1 rS0, 32, 48;		/* group 8, stage 4 ends */
+																dif.sau;	wr.fftn;	set.VRArange1 rS2, 0, 16;
+	st.laddr [a3]+1;		 									dif.sau;	wr.fftn;	setB.VRAptr rS0, 32;
+	st.laddr [a3]+1;		 												wr.fftn;
+																			wr.fftn;	set.VRArange2 rS0, 96, 112;
+				 															wr.fftn;	set.VRArange2 rS2, 64, 80;
+	st.laddr [a3]+1;														wr.fftn;	set.creg 15, 0xC;
+	st.laddr [a3]+1;
+	ld.laddr [a0]+1;			 			rd S0; nco;	rd S2;															/* group 1-16, stage 5 begins */
+	ld.laddr [a0]+1;			 			rd S0; nco;	rd S2;
+									 		rd S0; nco;	rd S2;	dif.sau;				set.VRArange1 rV, 256, 480;	
+							ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;				set.VRArange2 rV, 0, 0;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;				set.VRAincr rV, 32;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;				set.loop 5;
+	st.laddr [a3]+1;						rd S0; nco;	rd S2;	dif.sau;	wr.fft5;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft5;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft5;		 							loop_begin;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft5;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft5;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft5;		 							loop_end;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft5;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft5;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft5;	mv nco_k, 32;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft5;	set.VRAincr rS2, 32;			/* group 1-16, stage 5 ends */
+			 				ld.normal R1;		 				dif.sau;	wr.fft5;	set.VRArange1 rS2, 0, 96;
+	 															dif.sau;	wr.fft5;	set.VRArange2 rS2, 0, 0;
+	st.laddr [a3]+1;		 												wr.fft5;	set.VRAincr rS0, 32;
+			 																wr.fft5;	setB.VRAptr rS0, 16;
+	 																		wr.fft5;	set.VRArange1 rS0, 16, 112;
+																			wr.fft5;	set.VRArange2 rS0, 0, 0;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;															/* group 1-32, stage 6 begins */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;
+											rd S0; nco;	rd S2;	dif.sau;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;				set.loop 5;
+	st.laddr [a3]+1;						rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4;		 							loop_begin;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4;		 							loop_end;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft4;	mv nco_k, 64;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4;									/* group 1-32, stage 6 ends */
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4; 	set.Smode S0fft3, S2fft3;		/* group 1-256, s9 */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft4;	set.loop 5;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft4;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft3;		 							loop_begin;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft3;		 							loop_end;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	ld.laddr [a0]+1;			 			rd S0; nco;	rd S2;	dif.sau;	wr.fft3;	mv nco_k, 128;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;									/* group 1-256, stage 9 ends */
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;	set.Smode S0fft2, S2fft2;		/* group 1-512, s10 */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft3;	set.loop 5;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft3;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;		 							loop_begin;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;		 							loop_end;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;	mv nco_k, 256;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2;									/* group 1-512, stage 10 ends */
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2; 	set.Smode S0fft1, S2fft1;		/* group 1-1024, s11 */
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft2;	set.loop 5;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft2;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft1;		 							loop_begin;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft1;
+	ld.laddr [a0]+1;		ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft1;
+	ld.laddr [a0]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft1;		 							loop_end;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft1;
+	st.laddr [a3]+1;		ld.normal R0;	rd S0; nco;	rd S2;	dif.sau;	wr.fft1;
+							ld.normal R1;	rd S0; nco;	rd S2;	dif.sau;	wr.fft1;
+											rd S0; nco;	rd S2;	dif.sau;	wr.fft1;
+	st.laddr [a3]+1;			 			rd S0; nco;	rd S2;	dif.sau;	wr.fft1;
+	st.laddr [a3]+1;		 				rd S0; nco;	rd S2;	dif.sau;	wr.fft1;									/* group 1-1024, stage 11 ends */
+																dif.sau;	wr.fft1;	mv a6, 0;
+																dif.sau;	wr.fft1;	set.range a0, a6, 0;
+	st.laddr [a3]+1;		 												wr.fft1;
+	st.laddr [a3]+1;		 												wr.fft1;
+																			wr.fft1;	set.range a3, a6, 0;	rts;
+	st.laddr [a3]+1;		 												wr.fft1;	set.creg 15, 0xA;
+	st.laddr [a3]+1;																	set.creg 13, 0x0;
+	
+
+   .size   core_fftDIF512_hfx_hfx, .-core_fftDIF512_hfx_hfx
+// end
+//

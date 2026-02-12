@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+# Copyright 20172023 - 2025    NXP Semiconductors
+
+#include "vspa.h"
+
+#define VR     (__AU_COUNT__*4)  // Number of halfwords for one VRA register
+#define HVR    (__AU_COUNT__*2)  // Number of halfwords for half of VRA register
+
+	.section .text
+
+/*===================================================================================
+//  Subroutine name: txiqcomp
+//
+//  Sub types:
+//==================================================================================*/
+	.global _txiqcomp
+	.type _txiqcomp, @function
+_txiqcomp:
+#ifndef TXIQCOMP_STUB   				 																					
+                                                                                                        clr.VRA;
+                                                                                                        set.VRArange1 rS0, 1*VR+4, 1*VR+8;
+	ld.laddr [a2]+0;	                																set.VRAincr rS0, 4;   																									   																									    											
+    ld.laddr [a0]+1;																					set.VRAptr rS0, 1*VR+8; 
+    																									set.VRAptr rS2, 1*VR;  set.VRAptr rS1, 4*VR;
+    ld.laddr [a0]+1;		ld.normal R1;                                                               set.prec single, half_fixed, single, single, half_fixed;
+    						ld.normal R4;                                                               set.Smode S0i1r1i1r1, S1straight, S2i1r1i1r1;
+    ld.laddr [a0]+1;							rd S0; rd S1; rd S2;	rol;							set.rot R4l1;
+    	                    ld.normal R4;       rd S0; rd S1;												
+    ld.laddr [a0]+1;                            rd S0; rd S1;           rol;	rmad;
+    					    ld.normal R4;       rd S0; rd S1;                   rmac;                   
+    ld.laddr [a0]+1;                            rd S0; rd S1;           rol;    rmad;
+    	                    ld.normal R4;       rd S0; rd S1;                   rmac;                   set.loop g0,2;
+    ld.laddr [a0]+1;                            rd S0; rd S1;           rol;    rmad;
+    	                    ld.normal R4;       rd S0; rd S1;                   rmac;   wr.straight;
+	ld.laddr [a0]+1;                            rd S0; rd S1;           rol;    rmad;                   loop_begin;
+    st.laddr [a1]+1;        ld.normal R4;       rd S0; rd S1;                   rmac;   wr.straight;    loop_end;                                    
+   
+	rts;
+	nop;
+	nop;
+
+#else /* TXIQCOMP_STUB */
+    rts;
+    fnop;
+    fnop;
+
+#endif /* TXIQCOMP_STUB */
+
+	.size _txiqcomp, .-_txiqcomp

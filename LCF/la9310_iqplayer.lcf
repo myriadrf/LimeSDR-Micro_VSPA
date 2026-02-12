@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+// Copyright 2015 - 2025    NXP
+
+
+//**************************************************************************/
+//
+//
+//         Data             Instruction           OCRAM/DDR
+//     Address Space       Address Space        Address Space
+//     +-----------+       +-----------+        +-----------+
+//     |           |       |           |        |           |
+//     +-----------+       +-----------+        +-----------+<-- code_to_overlay_1
+//     | program   |       |   main    |   .----| overlay 1 |    load address
+//     | variables |       |  program  |   |    +-----------+
+//     | and heap  |       |           |   |    |           |
+//     +-----------+       |           |   |    +-----------+<-- code_to_overlay_2
+//     |           |       +-----------+   |    |           |    load address
+//     +-----------+       |           |   |  .-| overlay 2 |
+//     |           |       |           |   |  | |           |
+//     |           |       +-----------+   |  | +-----------+
+//     |           |       |           |   |  | |           |
+//     |           |       |  overlay  | <-'  | |           |
+//     |           |       |   space   | <----' +-----------+<-- data_to_overlay_1
+//     |           |       |           |        |           |    load address
+//     |           |       +-----------+        | overlay 3 |
+//     |           |       |           |   .----|           |
+//     |           |       +-----------+   |    |           |
+//     |           |                       |    +-----------+
+//     +-----------+                       |    |           |
+//     |           |                       |    +-----------+<-- data_to_overlay_2
+//     |  overlay  |<----------------------'    |           |    load address     
+//     |   space   |<---------------------------| overlay 4 |
+//     |           |                            |           |
+//     +-----------+                            +-----------+
+//     |           |                            |           |
+//     +-----------+                            +-----------+
+//
+//
+//
+// Define configuration specific values
+//
+
+arch(vspa2);
+number_of_cores(1);                               
+entry("_start");
+
+// DMEM_Line_Size is expressed in bytes and is dependent of AU number
+// The formula is 2 * number_of_AU * 4 bytes
+DMEM_Line_Size        		= 4 * 2 * n_au();
+
+VCPU_OVERLAYSize			= 0x02000;
+OVERLAY_SIZE = (2*1024*1024);
+
+VCPU_PRAMSize = (32*1024); //(32*1024);
+IPPU_PRAMSize = (2*1024);
+
+VCPU_DRAM_start = 0x0000;
+VCPU_DRAMSize = (16*1024);
+VCPU_TopMemAddress    		= 0x4000;
+
+IPPU_DRAM_start = 0x4000;
+IPPU_DRAMSize = (16*1024);
+IPPU_TopMemAddress    		= 0x8000;
+
+HeapSize   = 0x00000;
+StackSize  = 0x00100;
+StackStart = VCPU_TopMemAddress - align((StackSize + HeapSize), DMEM_Line_Size);
+
+DDR_CODE_OVERLAY_Start		= 0x20000000;	// start address of the code sections for overlays
+DDR_DATA_OVERLAY_Start		= 0x30000000;	// start address of the data sections for overlays
+
+
+memory_space (*)
+{
+	0("rx"): vcpu_pram, org = 0x0, len = VCPU_PRAMSize ;
+	1("rw"): vcpu_dram, org = VCPU_DRAM_start, len = VCPU_DRAMSize; 
+	2("rw"): ippu_dram, org = IPPU_DRAM_start, len = IPPU_DRAMSize; 
+	3("rx"): ippu_pram, org = 0x0, len = IPPU_PRAMSize;
+	6("rw"): ocram_data, org = 0x20000000, len = 0xF0000000;
+}
+
+
+unit private (*){
+	
+	KEEP( "*" (".my_code_1") );
+	KEEP( "*" (".my_code_2") ); 
+	
+	MEMORY {
+		.vpram 					("rx") 0 : org = 0x0, len = VCPU_PRAMSize-VCPU_OVERLAYSize;
+		.vpram_overlay 			("rx") 0 : AFTER(.vpram);
+
+		.ipram 					("rx") 3 : org = 0x0, len = IPPU_PRAMSize;
+
+		.vdram 					("rw") 1 : org = 0 ;
+		
+		.idram 					("rw") 2 : org = IPPU_DRAM_start;
+		.idram_overlay_space 	("rw") 2 : AFTER(.idram);
+		//.buglinker			    ("rw") 2 : org = 0x8000, len = 0x4000;
+		
+		//overlayed sections code/data
+		.IQ_data_ovl_ddr 		("rx") 6 : org = DDR_CODE_OVERLAY_Start,len = OVERLAY_SIZE;
+		.CAL_ovl_ddr 			("rx") 6 : AFTER(.IQ_data_ovl_ddr),len = OVERLAY_SIZE;
+		vcpu_dram_to_overlay_1 	("rw") 6 : org = DDR_DATA_OVERLAY_Start;
+		vcpu_dram_to_overlay_2 	("rw") 6 : AFTER(vcpu_dram_to_overlay_1);
+		
+		memory_stack_and_heap 	("rw") 2 : org = StackStart , len = StackSize + HeapSize;	
+	}
+	
+	SECTIONS {
+	
+		.text {
+           ___pram_start = .;
+ 		    .init
+			"*startup*.eln"(".text");
+			.text
+			.default
+			.unlikely
+			unmatch_pgm("*");
+           ___pram_limit = .;
+		} > .vpram;
+		
+		.data {
+            .dmem_proxy_tx
+            .dmem_proxy_rx
+            .vcpu_dmem
+		    __data_start = .;
+			.rom
+			.rodata
+			unmatch_rom("*");
+			".data"
+			.ovltab
+			unmatch_data("*");
+			__data_end = .;
+			"*startup*.eln"(".data");
+			.bsstab
+			__bss_start = .;
+			".bss"
+			unmatch_bss("*");
+			.vbss
+			__end = .;
+			__bss_end = .;
+			.ibss
+		} >.vdram;
+		
+		.idata {
+            .ippu_dmem
+		} > .idram
+		
+		.itext {
+			.itext
+		} > .ipram
+		
+		//CODE overlays assignments
+		.IQ_data_ovl_ddr {
+			.=align(16);
+            .text.opcode_1
+            .text.opcode_2
+            .text.opcode_5
+            .text.opcode_6
+ 			.=align(16);
+		} > .IQ_data_ovl_ddr
+		
+		.CAL_ovl_ddr {
+			.=align(16);
+            .text.opcode_3
+            .text.opcode_4
+			.=align(16);
+		} > .CAL_ovl_ddr
+		
+		OVERLAY .vpram_overlay {
+			PRELOAD (.IQ_data_ovl_ddr;)
+			.CAL_ovl_ddr;
+		} > .vpram_overlay ;
+	
+		
+		.stack {
+			LNK_SECTION(stack, "rw", StackSize + HeapSize, DMEM_Line_Size, "stack_and_heap");
+		}> memory_stack_and_heap;
+					
+	}
+}
+
+_end = __end;
+__heap = endof("stack_and_heap") & 0xFFFFFF;
+_heap = __heap;
+__stack = originof("stack_and_heap") & 0xFFFFFF;
+_stack = originof("stack_and_heap") & 0xFFFFFF;
+___stack_size = StackSize;
+___pram_size = ___pram_limit - ___pram_start;
+

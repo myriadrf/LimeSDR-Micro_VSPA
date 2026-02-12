@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+# Copyright 2017 - 2025   NXP Semiconductors
+
+// =============================================================================
+//! @file           txiqcomp_x32chf_5t.sx
+//! @brief          TX IQ compensation source file.
+//! @author         NXP Semiconductors.
+// =============================================================================
+#include "vspa.h"
+
+#define  VR (__AU_COUNT__*4)        // Number of half words for one full VRA register (full DMEM line)
+#define HVR (__AU_COUNT__*2)        // Number of half words for one half VRA register (half DMEM line)
+
+#define TX_IQ_COMP_DEL_FLT_LEN  5   // IQ delay filter length 
+
+// -----------------------------------------------------------------------------
+// Subroutine name: txiqcomp_x32chf_5t
+// -----------------------------------------------------------------------------
+    .section .text
+    .global _txiqcomp_x32chf_5t
+    .type _txiqcomp_x32chf_5t, @function
+    .size _txiqcomp_x32chf_5t, _txiqcomp_x32chf_5t_end -_txiqcomp_x32chf_5t
+_txiqcomp_x32chf_5t:
+
+    // ------------------------------------------------------------------------
+    // a0 - input pointer
+    // a1 - output pointer
+    // a2 - config pointer
+    // g0 - number of input lines
+    // ------------------------------------------------------------------------
+	
+    // a2:   
+    // float                 IQImb_ftaps[12];       // 24 HW
+	// unsigned int          IQImb_delay;           // 2  HW
+	// vspa_complex_float32  dcOffset;              // 4  HW
+	// vspa_complex_fixed16* inpCircBuffBase;       // 2  HW
+    // unsigned int          inpCircBuffSize;       // 2  HW
+	
+	ld g1,[a2+(30)*UPHW];                                             // g1 = inpCircBuffBase (opS, 4 cycles)                                                                                                           
+    ld g2,[a2+(32)*UPHW];                                             // g2 = inpCircBuffSize (opS, 4 cycles)                                                               
+	ld g3,[a2+(24)*UPHW];                                             // g3 = IQImb_delay     (opS, 4 cycles)
+	ld g4,[a2+(26)*UPHW];                                             // g4 = real(dcOffset)  (opS, 4 cycles)
+    ld g5,[a2+(28)*UPHW];                                             // g5 = imag(dcOffset)  (opS, 4 cycles)
+
+    set.range a0,g1,g2;                                                                        
+    set.range a3,g1,g2;                                                                        
+    ld [a0]-g3;                                                                                  mvB a3,a0;                                                            
+    ld [a3]-(((TX_IQ_COMP_DEL_FLT_LEN-1)*2))*UPHW;                                               clr.VRA;                                                   
+                    		
+    ld.laddr [a2]+0;                                                                             setB.VRAptr rS0,7*VR;                                                                                   
+    ld.laddr [a0]+1;                                                                             setB.VRAincr rS0,4;                                         
+    ld.laddr [a0]+0;                                          fill.d [rV],g4:g5;                                                                                                                        
+    ld.laddr [a3]+1;    ld.h2l     R7;                                                           set.prec single, half_fixed, single, single, half_fixed;            
+    ld.laddr [a3]+0;    ld.h2l     R0;                        rd S2;                             set.Smode S0i1r1i1r1, S1straight, S2i1r1i1r1;                              
+                        ld.l2h     R0;                                                           set.VRArange1 rS0,7*VR,7*VR+20;                                                                   
+                        ld.h2l     R2;                                                                           
+    ld.laddr [a0]+1;    ld.l2h_h2l R2;          rd S0; rd S1;                                    setB.VRAptr rS1,2*VR;                                   
+    ld.laddr [a0]+0;                      ror;  rd S0; rd S1;                                    set.rot R2R3r2;                                      
+    ld.laddr [a3]+1;                      ror;  rd S0; rd S1;           rmad;                    
+    ld.laddr [a3]+0;    ld.h2l     R0;    ror;  rd S0; rd S1;           rmac;                                
+                        ld.l2h     R0;    ror;  rd S0; rd S1;           rmac;                                                               
+                        ld.h2l     R2;          rd S0; rd S1;           rmac;                    setB.VRAptr rS1,0*VR;                              
+    ld.laddr [a0]+1;    ld.l2h_h2l R2;          rd S0; rd S1;           rmac;                    setB.VRAptr rS1,2*VR;                
+    ld.laddr [a0]+0;                      ror;  rd S0; rd S1;           rmac;                                
+    ld.laddr [a3]+1;                      ror;  rd S0; rd S1;           rmad;                                
+    ld.laddr [a3]+0;    ld.h2l     R0;    ror;  rd S0; rd S1;           rmac;                                             setB.loop g0,6;
+                        ld.l2h     R0;    ror;  rd S0; rd S1;           rmac;                    setB.VRAptr  rV,4*VR;            
+                        ld.h2l     R2;          rd S0; rd S1;           rmac;    wr.straight;    setB.VRAptr rS1,0*VR;    loop_begin;   
+    ld.laddr [a0]+1;    ld.l2h_h2l R2;          rd S0; rd S1;           rmac;                    setB.VRAptr rS1,2*VR;           
+    ld.laddr [a0]+0;                      ror;  rd S0; rd S1;           rmac;                                
+    ld.laddr [a3]+1;                      ror;  rd S0; rd S1;           rmad;                                
+    ld.laddr [a3]+0;    ld.h2l     R0;    ror;  rd S0; rd S1;           rmac;                    setB.VRAptr rSt,4;            
+    st.laddr [a1]+1;    ld.l2h     R0;    ror;  rd S0; rd S1;           rmac;                                             loop_end                             
+	
+	rts;      mv a0,0;
+	set.range a0,a0,0;
+	set.range a3,a0,0;
+    
+_txiqcomp_x32chf_5t_end:
+
+// -----------------------------------------------------------------------------
+// Subroutine name: txiqcomp_apply_gain
+// -----------------------------------------------------------------------------
+    .section .text
+    .global _txiqcomp_apply_gain
+    .type _txiqcomp_apply_gain, @function
+    .size _txiqcomp_apply_gain, _txiqcomp_apply_gain_end -_txiqcomp_apply_gain
+_txiqcomp_apply_gain:
+
+    // ------------------------------------------------------------------------
+    // a0 - IQ taps buffer pointer
+    // a1 - IQ config structure pointer
+    // g0 - real gain to be applied
+    // ------------------------------------------------------------------------
+
+	ld.laddr [a0]+0;															clr.VRA;
+	      										fill.w [rV],g0;
+	nop;                                                                        set.prec single, single, single, single, single;
+						ld.normal  R0;          rd S0;                          set.Smode S0straight, S1straight, S2zeros;  
+												       rd S1; rd S2;            
+												                        fnop;
+																		rmad;
+																		fnop;
+																		fnop;
+	rts;																
+						                                                         wr.straight;
+	st.low [a1]+0,2*12-1;
+	
+_txiqcomp_apply_gain_end:

@@ -1,0 +1,184 @@
+# SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+# Copyright 2024 - 2025  NXP
+
+
+
+//! @prototype  	ddc2x_8tap( cfixed16_t *pOut,
+//!								cfixed16_t *pIn,  
+//!								float32_t *pTaps, 
+//!								cfixed16_t *filtState,
+//!        						unsigned int n_samples )
+
+
+    
+	.section .text
+
+//#include "ddc2x.h"
+
+/*===================================================================================
+//  Subroutine name: decimator_2x_8_Taps_asm
+//
+//  Sub types:
+//==================================================================================*/
+	    
+	    
+	////////////////////////////////////////	32 history 		/////////////////////////////////
+	.global _decimator_2x_8_Taps_asm
+	.type _decimator_2x_8_Taps_asm, @function
+_decimator_2x_8_Taps_asm:
+	
+    clr.VRA;	
+    mv g7, 50; 		// 25 samples
+    add a3,50;		// pointing to the 25th history samples
+    add a1,50;		// pointing to the 25th input samples
+               						ld [a2]+0;        set.prec single, half_fixed, single, single, half_fixed;	//a2: coef
+    sr g0, g0, 6;          	    																				//# of lines to calc;  (n_samples/32)/2
+    setB.VRAptr rS0, 448;    		ld [a3]-g7;                                     							//a3: hist        
+    set.VRArange1 rS0, 448, 460;	      				ld.h2l R7;    											//r7: coef
+       								ldA.laddr [a1]+0;   														//a1: input[25]
+    set.rot R0R1r4;										ld.h2l R0;                      						//r0: hist                                                                                                                                                                   	
+    set.VRAincr rS0, 4;     		ldA.laddr [a1]+1;                                                	
+    setB.VRAptr rV, 256;    		ldA.laddr [a1]+0;   ld.l2h_h2l R0;                                            					
+    set.VRArange1 rV, 256, 288;							//ld.l2h R1; 
+    set.VRAincr rV, 32;		    						ld.h2l R2;   	ror;    rd S2; rd S1; rd S0;   set.Smode S0i1r1i1r1, S1i2i1r2r1, S2zeros;	//s0:coef ,rS1: r0
+    setB.loop g0, 8;        		ldA.laddr [a1]+1;	ld.l2h_h2l R2;  ror;    rd S1; rd S0;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;//
+    setB.VRAptr rS1, 128;												    	rd S1; rd S0;           cmac;
+    set.rot R2R3r4;         							ld.h2l R0;   	ror;    rd S1; rd S0;           cmac;
+    setB.VRAptr rSt, 4;      		ldA.laddr [a1]+1;	ld.l2h_h2l R0;  ror;    rd S1; rd S0;           cmac;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;//
+    setB.VRAptr rS1, 0;            			    						    	rd S1; rd S0;           cmac;							
+    set.rot R0R1r4;         							ld.h2l R2;   	ror;    rd S1; rd S0;           cmac;						loop_begin;
+    								ldA.laddr [a1]+1;	ld.l2h_h2l R2;  ror;    rd S1; rd S0;           cmac;		wr.hlinecplx;
+    								ldA.laddr [a1]+0;                   ror;	rd S1; rd S0;           cmad;//     
+    setB.VRAptr rS1, 128;   													rd S1; rd S0;           cmac;                     
+    set.rot R2R3r4;         							ld.h2l R0;   	ror;    rd S1; rd S0;           cmac;                     
+    								ldA.laddr [a1]+1;	ld.l2h_h2l R0;  ror;    rd S1; rd S0;           cmac;		wr.hlinecplx;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;     	
+    setB.VRAptr rS1, 0;            			    						    	rd S1; rd S0;           cmac;	    stA.laddr [a0]+1;	// loop_end									
+ 
+ 	add a1,-4*64;
+	ld.laddr [a1]+0;
+	nop
+	nop
+													ld.normal  R4;
+    rts;																										st.laddr [a3]+0;
+    nop;
+    nop;   
+    
+	.size _decimator_2x_8_Taps_asm, .-_decimator_2x_8_Taps_asm
+	
+	
+	
+	.global _decimator_4x_8_Taps_asm
+	.type _decimator_4x_8_Taps_asm, @function
+_decimator_4x_8_Taps_asm:
+	
+    clr.VRA;
+	
+	mv	g1,0x00003c00;
+	set.VRAptr rv,6*64;	
+	fill.w [rv],g1;
+	
+    mv g7, 50; 		// 25 samples
+    add a3,50;		// pointing to the 25th history samples
+    add a1,50;		// pointing to the 25th input samples
+               						ld [a2]+0;        set.prec single, half_fixed, single, single, half_fixed;	//a2: coef
+    sr g0, g0, 7;          	    																				//# of lines to calc;  (n_samples/32)/2
+    setB.VRAptr rS0, 448;    		ld [a3]-g7;                                     							//a3: hist        
+    set.VRArange1 rS0, 448, 460;	      				ld.h2l R7;    											//r7: coef
+       								ldA.laddr [a1]+0;   														//a1: input[25]
+    set.rot R0R1r4;										ld.h2l R0;                      						//r0: hist                                                                                                                                                                   	
+    set.VRAincr rS0, 4;     		ldA.laddr [a1]+1;                                                	
+    setB.VRAptr rV, 256;    		ldA.laddr [a1]+0;   ld.l2h_h2l R0;                                            					
+    set.VRArange1 rV, 256, 288;							//ld.l2h R1; 
+    set.VRAincr rV, 32;		    						ld.h2l R2;   	ror;    rd S2; rd S1; rd S0;   set.Smode S0i1r1i1r1, S1i2i1r2r1, S2zeros;	//s0:coef ,rS1: r0
+    setB.loop g0, 25;        		ldA.laddr [a1]+1;	ld.l2h_h2l R2;  ror;    rd S1; rd S0;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;//
+    setB.VRAptr rS1, 128;												    	rd S1; rd S0;           cmac;
+    set.rot R2R3r4;         							ld.h2l R0;   	ror;    rd S1; rd S0;           cmac;
+    setB.VRAptr rSt, 4;      		ldA.laddr [a1]+1;	ld.l2h_h2l R0;  ror;    rd S1; rd S0;           cmac;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;//
+    setB.VRAptr rS1, 0;            			    						    	rd S1; rd S0;           cmac;							
+    set.rot R0R1r4;         							ld.h2l R2;   	ror;    rd S1; rd S0;           cmac;						loop_begin;
+														ld.l2h_h2l R2;  ror;    rd S1; rd S0;           cmac;		wr.hlinecplx;
+																		ror;	rd S1; rd S0;           cmad;//     
+	setB.VRAptr rS1, 128;														rd S1; rd S0;           cmac;                     
+	set.rot R2R3r4;      												ror;	rd S1; rd S0;           cmac;                     
+																		ror;	rd S1; rd S0;           cmac;		wr.hlinecplx;
+																		ror;	rd S1; rd S0;           cmad;     	
+																				rd S1; rd S0;           cmac;	    				set.VRAptr rS0, 6*64; set.VRAptr rS1, 4*64;
+																										cmac;						set.prec half, half_fixed, single, single, half_fixed;												
+																				rd S1; rd S0;			cmac;		wr.hlinecplx;	set.Smode S0straight,S1i2i1r2r1,S2zeros;																					
+									ldA.laddr [a1]+1;																				set.VRAptr rS0, 6*64; 																							
+									ldA.laddr [a1]+0;   												cmad;						set.VRAptr rS1, 4*64;	
+	set.rot R0R1r4;																								
+														ld.h2l R0;   												wr.hlinecplx;
+    setB.VRAptr rS1, 0;            	ldA.laddr [a1]+1;	ld.l2h_h2l R0;  		rd S1; rd S0;										
+	                                ldA.laddr [a1]+0;                   											wr.hlinecplx;	set.prec single, half_fixed, single, single, half_fixed;
+																										cmad;						setB.VRAptr rS0, 448;
+    				         							ld.h2l R2;   	ror;    rd S1; rd S0;										set.Smode S0i1r1i1r1, S1i2i1r2r1, S2zeros;
+    								ldA.laddr [a1]+1;	ld.l2h_h2l R2;  ror;    rd S1; rd S0;								
+    								ldA.laddr [a1]+0;                   ror;	rd S1; rd S0;           cmad;   
+    setB.VRAptr rS1, 128;   													rd S1; rd S0;           cmac;       wr.hlinecplx;              
+    set.rot R2R3r4;         							ld.h2l R0;   	ror;    rd S1; rd S0;           cmac;       stA.laddr [a0]+1;              
+    								ldA.laddr [a1]+1;	ld.l2h_h2l R0;  ror;    rd S1; rd S0;           cmac;				
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;     	
+    setB.VRAptr rS1, 0;            			    						    	rd S1; rd S0;           cmac;	    				loop_end;								
+ 
+ 	add a1,-4*64;
+	ld.laddr [a1]+0;
+	nop
+	nop
+													ld.normal  R4;
+    rts;																										st.laddr [a3]+0;
+    nop;
+    nop;   
+    
+	.size _decimator_4x_8_Taps_asm, .-_decimator_4x_8_Taps_asm	
+	
+//old
+	    
+	////////////////////////////////////////	32 history 		/////////////////////////////////
+	.global _ddc2x_8tap_old
+	.type _ddc2x_8tap_old, @function
+_ddc2x_8tap_old:
+	
+    clr.VRA;	
+                            		ldA [a2]+0;        set.prec single, half_fixed, single, single, half_fixed;	//a2: coef
+    sr g0, g0, 6;          	    																				//# of lines to calc;  (n_samples/32)/2
+    					    		ldA [a3]+0;                                     							//a3: hist        
+    set.rot R0R1r4;         		       				ld.h2l R7;    											//r7: coef
+    setB.VRAptr rS0, 448;   		ldA.laddr [a1]+0;   
+    set.VRArange1 rS0, 448, 460;						ld.normal R0;                      						//r0: hist     a1 : in                                                                                                                                                              	
+    set.VRAincr rS0, 4;     		ldA.laddr [a1]+1;                                                                 	
+    setB.VRAptr rV, 256;    		ldA.laddr [a1]+0;	                                            					
+    set.VRArange1 rV, 256, 288;							ld.normal R1; 
+    set.VRAincr rV, 32;		    						ld.normal R2;   ror;    rd S2; rd S1; rd S0;   set.Smode S0i1r1i1r1, S1i2i1r2r1, S2zeros;	//s0:coef ,rS1: r0
+    setB.loop g0, 8;        		ldA.laddr [a1]+1;	ld.normal R3;   ror;    rd S1; rd S0;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;//
+    setB.VRAptr rS1, 128;												    	rd S1; rd S0;           cmac;
+    set.rot R2R3r4;         							ld.normal R0;   ror;    rd S1; rd S0;           cmac;
+    setB.VRAptr rSt, 4;      		ldA.laddr [a1]+1;	ld.normal R1;   ror;    rd S1; rd S0;           cmac;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;//
+    setB.VRAptr rS1, 0;            			    						    	rd S1; rd S0;           cmac;							
+    set.rot R0R1r4;         							ld.normal R2;   ror;    rd S1; rd S0;           cmac;						loop_begin;
+    								ldA.laddr [a1]+1;	ld.normal R3;   ror;    rd S1; rd S0;           cmac;		wr.hlinecplx;
+    								ldA.laddr [a1]+0;                   ror;	rd S1; rd S0;           cmad;//     
+    setB.VRAptr rS1, 128;   													rd S1; rd S0;           cmac;                     
+    set.rot R2R3r4;         							ld.normal R0;   ror;    rd S1; rd S0;           cmac;                     
+    								ldA.laddr [a1]+1;	ld.normal R1;   ror;    rd S1; rd S0;           cmac;		wr.hlinecplx;
+    								ldA.laddr [a1]+0;                   ror;    rd S1; rd S0;           cmad;     	
+    setB.VRAptr rS1, 0;            			    						    	rd S1; rd S0;           cmac;	    stA.laddr [a0]+1;	// loop_end									
+ 
+ 	add a1,-4*64;
+	ld.laddr [a1]+0;
+	nop
+	nop
+													ld.normal  R4;
+    rts;																										st.laddr [a3]+0;
+    nop;
+    nop;   
+    
+	.size _ddc2x_8tap_old, .-_ddc2x_8tap_old
+	

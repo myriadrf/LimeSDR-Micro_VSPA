@@ -1,0 +1,1486 @@
+# SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+# Copyright 20172023 - 2025   NXP Semiconductors
+
+// =============================================================================
+//! @file       vcpu.sx
+//! @brief
+//! @author     NXP Semiconductors.
+// =============================================================================
+
+#include "vspa.h"
+#include "vcpu.h"
+
+#define VECSIZE     (__AU_COUNT__ * 4)
+
+#if     (__AU_COUNT__ == 2)
+#define VECLOG2     3
+#elif   (__AU_COUNT__ == 4)
+#define VECLOG2     4
+#elif   (__AU_COUNT__ == 8)
+#define VECLOG2     5
+#elif   (__AU_COUNT__ == 16)
+#define VECLOG2     6
+#elif   (__AU_COUNT__ == 32)
+#define VECLOG2     7
+#elif   (__AU_COUNT__ == 64)
+#define VECLOG2     8
+#else
+#error  "AU count not supported!"
+#endif
+
+#include "vcpu.inc"
+
+#if     defined(__VSPA2__)
+
+// -----------------------------------------------------------------------------
+//  entry_t __entry
+// -----------------------------------------------------------------------------
+
+    .global     ___entry
+    .type       ___entry, %object
+    .size       ___entry, ___entry_end - ___entry
+
+    .section    .data.vcpu
+    .align      2
+___entry:
+    .word       ___start
+___entry_end:
+
+
+// -----------------------------------------------------------------------------
+//  VSPA startup code
+//
+//  Load the entry point function pointer __entry and
+//  executes code from this address.
+// -----------------------------------------------------------------------------
+    .global     ___start
+    .type       ___start, %function
+    .size       ___start, ___start_end - ___start
+
+    .section    .init, "ax", %progbits
+
+___start:
+    set.creg    22, 0
+    ld          g11, ___entry
+    mvip        g10, 0x714 >> 2
+    nop
+    nop
+    nop
+    jmp         g11
+    mv          sp, g10
+    fnop
+___start_end:
+
+
+// -----------------------------------------------------------------------------
+//  void memclrcirc(void *s, size_t n, void *b, size_t s)
+//  void memclr(void *s, size_t n)
+//
+//  Clear half words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  number of half words to set.
+//      g1  number of half words in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      a0, a1, g0, g1, g2, g3, g6, g7
+// -----------------------------------------------------------------------------
+
+    .global     _memclrcirc
+    .type       _memclrcirc, %function
+    .size       _memclrcirc, _memclrcirc_end - _memclrcirc
+
+    .global     _memclr
+    .type       _memclr, %function
+    .size       _memclr, _memclr_end - _memclr
+
+    .section    .text.vcpu, "ax", %progbits
+_memclrcirc:
+    set.range   a0, a1, g1
+_memclr:
+    mv          g1, a0
+    and         g2, g1, 1
+    cmp         g2, 0
+    nop
+    jmp.eq      _memclr_head32
+    mv          g7, 0
+    mv          g6, VECSIZE
+_memclr_head16:
+    sth         [a0]+SIZEMAU, g7
+    subs.z      g0, 1
+    mv          g1, a0
+_memclr_head32:
+    cmp         g0, 0
+    cmp         g0, 1
+    jmp.eq      _memclrend
+    jmp.eq      _memclrend
+    nop
+    sth         [a0]+0, g7
+    andd        g2, g1, VECSIZE-1
+    cmp         g2, 0
+    nop
+    jmp.eq      _memclr_vec
+    nop
+    nop
+    subs        g2, g6, g2
+    cmp         g0, g2
+    nop
+    mv.lt       g2, g0
+    sr          g3, g2, 1
+    sl          g2, g3, 1
+    set.loop    g3, 1
+    subs        g0, g0, g2
+    sts         [a0]+2*SIZEMAU, g7; loop_begin; loop_end
+_memclr_vec:
+    sr          g2, g0, VECLOG2
+    cmp         g2, 0
+    sl          g3, g2, VECLOG2
+    jmp.eq      _memclr_tail32
+    subS        g0, g0, g3
+    nop
+    set.loop    g2, 1
+    clr.vra;    clr r0
+    sta.laddr   [a0]+1; loop_begin; loop_end;
+_memclr_tail32:
+    sr          g2, g0, 1
+    cmp         g2, 0
+    sl          g3, g2, 1
+    jmp.eq      _memclr_tail16
+    subS        g0, g0, g3
+    nop
+    set.loop    g2, 1
+    nop
+    sts         [a0]+2*SIZEMAU, g7; loop_begin; loop_end;
+_memclr_tail16:
+    cmp         g0, 0
+    nop
+    jmp.eq      _memclrend
+    nop
+    nop
+    sth         [a0]+SIZEMAU, g7
+_memclrend:
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memclr_end:
+_memclrcirc_end:
+
+#else  // ___VSPA2__
+
+// -----------------------------------------------------------------------------
+//  void __init(void) __noreturn
+//
+//  VSPA core initialization function.
+//
+//  Parameters:
+//      None.
+//
+//  Return value:
+//      This function does not return.
+//
+//  Clobbered registers:
+//      g0, g1, a0
+// -----------------------------------------------------------------------------
+
+    .global     ___init
+    .weak       ___init
+    .type       ___init, %function
+    .size       ___init, ___init_end - ___init
+
+    .section    .reset, "ax", %progbits
+
+___init:
+    // Enable 8-bit addressing mode:
+    set.creg    22, 2                           //
+
+    // Initial stack pointer:
+    mv          sp, ___stack_start              //
+
+    // System control registers standard configuration:
+    mv          g0, 0                           //
+    mvip        0x408 >> 2, g0, 0x000C003E      //
+    set.creg    15, 0                           //
+
+    // Disable circular addressing:
+    set.range   a0, g0, 0                       // Disable range on a0.
+    set.range   a1, g0, 0                       // Disable range on a1.
+    set.range   a2, g0, 0                       // Disable range on a2.
+    set.range   a3, g0, 0                       // Disable range on a3.
+
+    // Reset host interface:
+    mvip        HOST_VCPU_FLAGS0 , 0xFFFFFFFF   // Clear Host-to-VSPA flags #0.
+    mvip        HOST_VCPU_FLAGS1 , 0xFFFFFFFF   // Clear Host-to-VSPA flags #1.
+    mvip        g0, VCPU_IN_0_MSB, 0xFFFFFFFF   // Empty mailbox #0 MSB.
+    mvip        g0, VCPU_IN_1_MSB, 0xFFFFFFFF   // Empty mailbox #1 MSB.
+    mvip        g0, VCPU_IN_0_LSB, 0xFFFFFFFF   // Empty mailbox #0 LSB.
+    mvip        g0, VCPU_IN_1_LSB, 0xFFFFFFFF   // Empty mailbox #1 LSB.
+
+    // Reset external event interface:
+    mvip        EXT_GO_ENA , 0                  // Disable external events.
+    mvip        EXT_GO_STAT, 0xFFFFFFFF         // Clear external events.
+
+    // Reset AXI slave interface:
+    mvip        AXISLV_GOEN0 , 0                // Disable AXI slave events.
+    mvip        AXISLV_GOEN1 , 0                //
+    mvip        AXISLV_FLAGS0, 0xFFFFFFFF       // Clear AXI slave events.
+    mvip        AXISLV_FLAGS1, 0xFFFFFFFF       //
+
+    // Reset DMA controller:
+    mvip        DMA_STAT_ABORT , 0xFFFFFFFF     // Abort ongoing/pending transfers.
+    mvip        DMA_XFRERR_STAT, 0xFFFFFFFF     // Clear transfer errors.
+    mvip        DMA_CFGERR_STAT, 0xFFFFFFFF     // Clear config errors.
+    mvip        DMA_COMP_STAT  , 0xFFFFFFFF     // Clear channel completions.
+    mvip        DMA_GO_STAT    , 0xFFFFFFFF     // Clear DMA events.
+
+    // Reset P-DMA controller:
+    mvip        AD_STATUS, 0x0000000F           // Clear P-DMA completion and error bits.
+
+    // Reset IPPU coprocessor:
+    mvip        IPPURC         , 0x1 << 31      // Clear IPPU error.
+    mvip        IPPUARGBASEADDR, 0              // Set argument base to 0.
+
+    // Reset control register:
+    mv          g0, 0x03F000E3                  // Control register bits to set.
+    mvip        CONTROL, g0, 0x0FF01AF3
+
+    // Initialize stack with pre-defined pattern:
+#define SIZE_STACK  (___stack_limit - ___stack_start)
+    mv          g0, 0x600D57AC                  // Stack pattern.
+    jsr         _memsetvec                      // Vector-wide write.
+    mv          a0, ___stack_start              // Base address.
+    mv          g1, NVEC8(SIZE_STACK)           // Number of vectors.
+
+    // Zero the resident bank0 ("vdram") bss:
+    jsr         _memclr                             // Fill BSS with zeros.
+    mv          a0, ___bss_start_b0                 // Base address.
+    mv          g0, NLANE16 * NVEC8(___bss_size_b0) // Number of half-words.
+
+    // Zero the resident bank1 ("idram") bss:
+    jsr         _memclr                             // Fill BSS with zeros.
+    mv          a0, ___bss_start_b1                 // Base address.
+    mv          g0, NLANE16 * NVEC8(___bss_size_b1) // Number of half-words.
+
+    // Invoke user-defined initialization:
+    jsr         _init
+    mvip        VCPU_GO_ADDR, _main
+    mvip        VCPU_GO_STACK, ___stack_start
+
+    // FALL THROUGH
+___init_end:
+
+    .global     ___internal_done
+    .weak       ___internal_done
+    .type       ___internal_done, %function
+    .size       ___internal_done, ___internal_done_end - ___internal_done
+
+___internal_done:
+    nop
+    done
+    fnop
+    fnop
+___internal_done_end:
+
+#if 0
+// -----------------------------------------------------------------------------
+//  void __exit(void) __noreturn
+//
+//  VSPA core termination function.
+//
+//  Parameters:
+//      None.
+//
+//  Return value:
+//      This function does not return.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+
+    .global     ___exit
+    .weak       ___exit
+    .type       ___exit, %function
+    .size       ___exit, ___exit_end - ___exit
+
+    .section    .text.vcpu, "ax", %progbits
+
+___exit:
+    // System control registers standard configuration:
+    mv          g0, 0                       //
+    mvip        0x408 >> 2, g0, 0x000C003E
+    set.creg    15, 0
+
+    // Disable circular addressing:
+    set.range   a0, g0, 0                   // Disable range on a0.
+    set.range   a1, g0, 0                   // Disable range on a1.
+    set.range   a2, g0, 0                   // Disable range on a2.
+    set.range   a3, g0, 0                   // Disable range on a3.
+
+    // Host interface:
+    mvip        0x1C >> 2, 0xFFFFFFFF       // Clear Host-to-VSPA flags #0.
+    mvip        0x20 >> 2, 0xFFFFFFFF       // Clear Host-to-VSPA flags #1.
+    mvip        g0, 0x650 >> 2, 0xFFFFFFFF  // Empty mailbox #0 MSB.
+    mvip        g0, 0x658 >> 2, 0xFFFFFFFF  // Empty mailbox #1 MSB.
+    mvip        g0, 0x654 >> 2, 0xFFFFFFFF  // Empty mailbox #0 LSB.
+    mvip        g0, 0x65C >> 2, 0xFFFFFFFF  // Empty mailbox #1 LSB.
+
+    // External event interface:
+    mvip        0x28 >> 2, 0                // Disable all external events.
+    mvip        0x2C >> 2, 0xFFFFFFFF       // Clear all external events.
+
+    // AXI slave interface:
+    mvip        0x68 >> 2, 0                // Disable AXI slave events #0.
+    mvip        0x6C >> 2, 0                // Disable AXI slave events #1.
+    mvip        0x60 >> 2, 0xFFFFFFFF       // Clear all AXI slave flags #0.
+    mvip        0x64 >> 2, 0xFFFFFFFF       // Clear all AXI slave flags #1.
+
+    // DMA engine:
+    mvip        0xC0 >> 2, 0xFFFFFFFF       // Abort all pending transfers.
+    mvip        0xCC >> 2, 0xFFFFFFFF       // Clear all transfer errors.
+    mvip        0xD0 >> 2, 0xFFFFFFFF       // Clear all configuration errors.
+    mvip        0xC8 >> 2, 0xFFFFFFFF       // Clear all complete channels.
+    mvip        0xD8 >> 2, 0xFFFFFFFF       // Clear all DMA events.
+
+    // IPPU engine:
+    mvip        0x708 >> 2, (0x1 << 29) | (0x1 << 31)   // Abort and clear any pending error.
+
+    // FECU engine:
+    mvip        0x300 >> 2, 0x1 << 2        // Disable all pending operations.
+    mvip        0x364 >> 2, 0x1 << 10       // Clear error.
+
+    // Control register:
+    mv          g0, 0x03F000E3              // Control register bits to set.
+    mvip        0x8 >> 2, g0, 0x0FF01AF3    // Control register write.
+
+    // Entry point & stack pointer:
+#if     !defined(__LA1785__)
+    st          ___entry, _main             // Initial entry point.
+    mv          sp, ___stack_start
+#else
+    mvip        0x180 >> 2, _main           // Initial entry point.
+    mvip        0x184 >> 2, ___stack_start  // Stack base address.
+#endif
+
+    // Enter idle:
+    nop
+    done
+    fnop
+    fnop
+___exit_end:
+#endif
+
+// -----------------------------------------------------------------------------
+//  void main(void) __noreturn
+//
+//  VSPA application function.
+//
+//  Parameters:
+//      None.
+//
+//  Return value:
+//      This function does not return.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _main
+    .weak       _main
+    .type       _main, %function
+    .size       _main, _main_end - _main
+
+    .section    .text.vcpu, "ax", %progbits
+
+_main:
+    rts
+    fnop
+    fnop
+_main_end:
+
+// -----------------------------------------------------------------------------
+//  void init(void)
+//
+//  VSPA application initialization function.
+//
+//  Parameters:
+//      None.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _init
+    .weak       _init
+    .type       _init, %function
+    .size       _init, _init_end - _init
+
+    .section    .text.vcpu, "ax", %progbits
+
+_init:
+    rts
+    fnop
+    fnop
+_init_end:
+
+#if 0
+// -----------------------------------------------------------------------------
+//  void exit(void) __noreturn
+//
+//  VSPA application termination function.
+//
+//  Parameters:
+//      None.
+//
+//  Return value:
+//      This function does not return.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _exit
+    .weak       _exit
+    .type       _exit, %function
+    .size       _exit, _exit_end - _exit
+
+    .section    .text.vcpu, "ax", %progbits
+
+_exit:
+    jsr     ___exit
+    fnop
+    fnop
+_exit_end:
+#endif
+
+// -----------------------------------------------------------------------------
+//  float __f_add(float x, float y)
+//
+//  Single precision floating point addition.
+//
+//  Parameters:
+//      g0  Single precision floating point operand x.
+//      g1  Single precision floating point operand y.
+//
+//  Return value:
+//      The single precision floating point result of x+y.
+//
+//  Clobbered registers:
+//      None.
+// -----------------------------------------------------------------------------
+    .global     ___f_add
+    .type       ___f_add, %function
+    .size       ___f_add, ___f_add_end - ___f_add
+
+    .section    .text.vcpu, "ax", %progbits
+
+___f_add:
+    set.prec single, single, single, single, single
+    set.vraptr rv, 4*__AU_COUNT__           // Point to R1.
+    mv.w [rv], g1                           // R1 = y.
+    clr.vra
+    mv.w [rv], g0                           // R0 = x.
+    set.vraptr rs2, 4*__AU_COUNT__          // Point to R1.
+    set.smode s0straight, s1real1, s2straight; rd s0; rd s1; rd s2;
+    nop
+    rmad                                    // V = R0 * 1 + R1.
+    nop
+    nop
+    nop
+    wr.straight; rts
+    mv.w g0, [rs0]
+    fnop
+___f_add_end:
+
+// -----------------------------------------------------------------------------
+//  float __f_div(float x, float y)
+//
+//  Single precision floating point division.
+//
+//  Parameters:
+//      g0  Single precision floating point numerator.
+//      g1  Single precision floating point denominator.
+//
+//  Return value:
+//      The single precision floating point result of x/y.
+//
+//  Clobbered registers:
+//      None.
+// -----------------------------------------------------------------------------
+    .global     ___f_div
+    .type       ___f_div, %function
+    .size       ___f_div, ___f_div_end - ___f_div
+
+    .section    .text.vcpu, "ax", %progbits
+
+___f_div:
+    set.prec single, single, single, single, single
+    clr.vra
+    mv.w [rv], g1                           // R0 = y.
+    set.smode s1straight; rd s1
+    set.vraptr rs1, 4*__AU_COUNT__          // Point to R1.
+    rcp
+    set.smode s0straight, s1straight, s2zeros;
+    wr.fn1;                                 // R0 = 1/y.
+    set.vraptr rv, 4*__AU_COUNT__           // Point to R1.
+    mv.w [rv], g0                           // R1 = x.
+    rd s0; rd s1; rd s2
+    set.vraptr rv, 0
+    rmad                                    // V = R0 * R1 + 0.
+    nop
+    nop
+    nop
+    wr.straight; rts
+    mv.w g0, [rs0]
+    fnop
+___f_div_end:
+
+// -----------------------------------------------------------------------------
+//  float __f_mul(float x, float y)
+//
+//  Single precision floating point multiplication.
+//
+//  Parameters:
+//      g0  Single precision floating point operand x.
+//      g1  Single precision floating point operand y.
+//
+//  Return value:
+//      The single precision floating point result of x*y.
+//
+//  Clobbered registers:
+//      None.
+// -----------------------------------------------------------------------------
+    .global     ___f_mul
+    .type       ___f_mul, %function
+    .size       ___f_mul, ___f_mul_end - ___f_mul
+
+    .section    .text.vcpu, "ax", %progbits
+
+___f_mul:
+    set.prec single, single, single, single, single
+    set.vraptr rv, 4*__AU_COUNT__           // Point to R1.
+    mv.w [rv], g1                           // R1 = y.
+    clr.vra
+    mv.w [rv], g0                           // R0 = x.
+    set.vraptr rs1, 4*__AU_COUNT__          // Point to R1.
+    set.smode s0straight, s1straight, s2zeros; rd s0; rd s1; rd s2;
+    nop
+    rmad                                    // V = R0 * R1 + 0.
+    nop
+    nop
+    nop
+    wr.straight; rts
+    mv.w g0, [rs0]
+    fnop
+___f_mul_end:
+
+// -----------------------------------------------------------------------------
+//  float __f_sub(float x, float y)
+//
+//  Single precision floating point subtraction.
+//
+//  Parameters:
+//      g0  Single precision floating point operand x.
+//      g1  Single precision floating point operand y.
+//
+//  Return value:
+//      The single precision floating point result of x-y.
+//
+//  Clobbered registers:
+//      None.
+// -----------------------------------------------------------------------------
+    .global     ___f_sub
+    .type       ___f_sub, %function
+    .size       ___f_sub, ___f_sub_end - ___f_sub
+
+    .section    .text.vcpu, "ax", %progbits
+
+___f_sub:
+    set.prec single, single, single, single, single
+    set.vraptr rv, 4*__AU_COUNT__           // Point to R1.
+    mv.w [rv], g0                           // R1 = x.
+    clr.vra
+    mv.w [rv], g1                           // R0 = y.
+    set.vraptr rs2, 4*__AU_COUNT__          // Point to R1.
+    set.smode s0chs, s0straight, s1real1, s2straight; rd s0; rd s1; rd s2;
+    nop
+    rmad                                    // V = -R0 * 1 + R1.
+    nop
+    nop
+    nop
+    wr.straight; rts
+    mv.w g0, [rs0]
+    fnop
+___f_sub_end:
+
+// -----------------------------------------------------------------------------
+//  float fabsf(float x)
+//
+//  Single precision floating point absolute value.
+//
+//  Parameters:
+//      g0  Single precision floating point operand x.
+//
+//  Return value:
+//      The absolute value of the input argument x.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _fabsf
+    .type       _fabsf, %function
+    .size       _fabsf, _fabsf_end - _fabsf
+
+    .section    .text.vcpu, "ax", %progbits
+
+_fabsf:
+    set.prec single, single, single, single, single
+    clr.vra
+    mv.w [rv], g0                                               // R0 = x.
+    set.smode s0abs, s1real1, s2zeros; rd s0; rd s1; rd s2      // s0 = abs(x).
+    nop
+    rmad                                                        // V = abs(x) * 1 + 0.
+    nop
+    nop
+    nop
+    wr.straight; rts
+    mv.w g0, [rs0]
+    fnop
+_fabsf_end:
+
+// -----------------------------------------------------------------------------
+//  float sqrtf(float x)
+//
+//  Single precision floating point square root value.
+//
+//  Parameters:
+//      g0  Single precision floating point operand x.
+//
+//  Return value:
+//      The single precision floating point square root value
+//      of the input argument x.
+//
+//  Clobbered registers:
+//      None.
+// -----------------------------------------------------------------------------
+    .global     _sqrtf
+    .type       _sqrtf, %function
+    .size       _sqrtf, _sqrtf_end - _sqrtf
+
+    .section    .text.vcpu, "ax", %progbits
+
+_sqrtf:
+    set.prec single, single, single, single, single
+    clr.vra
+    mv.w [rv], g0
+    set.smode s1straight; rd s1
+    nop
+    srt
+    nop
+    wr.fn1; rts
+    mv.w g0, [rs0]
+    fnop
+_sqrtf_end:
+
+// -----------------------------------------------------------------------------
+//  float rcpf(float x)
+//
+//  Single precision floating point reciprocal value.
+//
+//  Parameters:
+//      g0  Single precision floating point operand x.
+//
+//  Return value:
+//      The single precision floating point reciprocal value
+//      of the input argument x, 1/x.
+//
+//  Clobbered registers:
+//      None.
+// -----------------------------------------------------------------------------
+    .global     _rcpf
+    .type       _rcpf, %function
+    .size       _rcpf, _rcpf_end - _rcpf
+
+    .section    .text.vcpu, "ax", %progbits
+
+_rcpf:
+    set.prec single, single, single, single, single
+    clr.vra
+    mv.w [rv], g0
+    set.smode s1straight; rd s1
+    nop
+    rcp
+    nop
+    wr.fn1; rts
+    mv.w g0, [rs0]
+    fnop
+_rcpf_end:
+
+// -----------------------------------------------------------------------------
+//  float rsqrtf(float x)
+//
+//  Single precision floating point reciprocal square root value.
+//
+//  Parameters:
+//      g0  Single precision floating point operand x.
+//
+//  Return value:
+//      The single precision floating point reciprocal value of the square root
+//      value of the input argument x, 1/sqrt(x).
+//
+//  Clobbered registers:
+//      None.
+// -----------------------------------------------------------------------------
+    .global     _rsqrtf
+    .type       _rsqrtf, %function
+    .size       _rsqrtf, _rsqrtf_end - _rsqrtf
+
+    .section    .text.vcpu, "ax", %progbits
+
+_rsqrtf:
+    set.prec single, single, single, single, single
+    clr.vra
+    mv.w [rv], g0
+    set.smode s1straight; rd s1
+    nop
+    rrt
+    nop
+    wr.fn1; rts
+    mv.w g0, [rs0]
+    fnop
+_rsqrtf_end:
+
+// -----------------------------------------------------------------------------
+//  void memset8(void *s, int c, size_t n)
+//
+//  Set half words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      g0  value to set.
+//      g1  number of bytes to set.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      a0
+// -----------------------------------------------------------------------------
+    .global     _memset8
+    .type       _memset8, %function
+    .size       _memset8, _memset8_end - _memset8
+
+    .section    .text.vcpu, "ax", %progbits
+
+_memset8:
+    set.loop    g1, 1;
+	fnop;
+    stb         [a0]+1, g0; loop_begin; loop_end;
+    rts
+    fnop;
+    fnop;
+_memset8_end:
+
+// -----------------------------------------------------------------------------
+//  void memset16circ(void *s, int c, size_t n, void *b, size_t s)
+//  void memset16(void *s, int c, size_t n)
+//
+//  Set half words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  value to set.
+//      g1  number of half words to set.
+//      g2  number of half words in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      a0, a1
+// -----------------------------------------------------------------------------
+
+    .global     _memset16circ
+    .type       _memset16circ, %function
+    .size       _memset16circ, _memset16circ_end - _memset16circ
+
+    .global     _memset16
+    .type       _memset16, %function
+    .size       _memset16, _memset16_end - _memset16
+
+    .section    .text.vcpu, "ax", %progbits
+
+_memset16circ:
+    set.range   a0, a1, g2
+_memset16:
+    set.loop    g1, 1
+	fnop
+    sth         [a0]+SIZEMAU, g0; loop_begin; loop_end;
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memset16_end:
+_memset16circ_end:
+
+// -----------------------------------------------------------------------------
+//  void memset32circ(void *s, int c, size_t n, void *b, size_t s)
+//  void memset32(void *s, int c, size_t n)
+//
+//  Set words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  value to set.
+//      g1  number of words to set.
+//      g2  number of words in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      a0, a1
+// -----------------------------------------------------------------------------
+
+    .global     _memset32circ
+    .type       _memset32circ, %function
+    .size       _memset32circ, _memset32circ_end - _memset32circ
+
+    .global     _memset32
+    .type       _memset32, %function
+    .size       _memset32, _memset32_end - _memset32
+
+    .section    .text.vcpu, "ax", %progbits
+
+_memset32circ:
+    set.range   a0, a1, g2
+_memset32:
+    set.loop    g1, 1
+	fnop
+    sts         [a0]+2*SIZEMAU, g0; loop_begin; loop_end;
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memset32_end:
+_memset32circ_end:
+
+// -----------------------------------------------------------------------------
+//  void memsetveccirc(void *s, int c, size_t n, void *b, size_t s)
+//  void memsetvec(void *s, int c, size_t n)
+//
+//  Set vectors in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  value to set.
+//      g1  number of vectors to set.
+//      g2  number of vectors in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      a0, a1
+// -----------------------------------------------------------------------------
+
+    .global     _memsetveccirc
+    .type       _memsetveccirc, %function
+    .size       _memsetveccirc, _memsetveccirc_end - _memsetveccirc
+
+    .global     _memsetvec
+    .type       _memsetvec, %function
+    .size       _memsetvec, _memsetvec_end - _memsetvec
+
+    .section    .text.vcpu, "ax", %progbits
+
+_memsetveccirc:
+    set.range   a0, a1, g2
+_memsetvec:
+    set.loop    g1, 1
+    clr.vra
+    fill.w [rv], g0
+    sta.laddr   [a0]+1; loop_begin; loop_end;
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memsetvec_end:
+_memsetveccirc_end:
+
+// -----------------------------------------------------------------------------
+//  void memclrcirc(void *s, size_t n, void *b, size_t s)
+//  void memclr(void *s, size_t n)
+//
+//  Clear half words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  number of half words to set.
+//      g1  number of half words in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      a0, a1, g0, g1, g2, g3, g6, g7
+// -----------------------------------------------------------------------------
+
+    .global     _memclrcirc
+    .type       _memclrcirc, %function
+    .size       _memclrcirc, _memclrcirc_end - _memclrcirc
+
+    .global     _memclr
+    .type       _memclr, %function
+    .size       _memclr, _memclr_end - _memclr
+
+    .section    .text.vcpu, "ax", %progbits
+_memclrcirc:
+    set.range   a0, a1, g1
+_memclr:
+    mv          g1, a0
+    and         g2, g1, 1
+    cmp         g2, 0
+    nop
+    jmp.eq      _memclr_head32
+    mv          g7, 0
+    mv          g6, VECSIZE
+_memclr_head16:
+    sth         [a0]+SIZEMAU, g7
+    subs.z      g0, 1
+    mv          g1, a0
+_memclr_head32:
+    cmp         g0, 0
+    cmp         g0, 1
+    jmp.eq      _memclrend
+    jmp.eq      _memclrend
+    nop
+    sth         [a0]+0, g7
+    andd        g2, g1, VECSIZE-1
+    cmp         g2, 0
+    nop
+    jmp.eq      _memclr_vec
+    nop
+    nop
+    subs        g2, g6, g2
+    cmp         g0, g2
+    nop
+    mv.lt       g2, g0
+    sr          g3, g2, 1
+    sl          g2, g3, 1
+    set.loop    g3, 1
+    subs        g0, g0, g2
+    sts         [a0]+2*SIZEMAU, g7; loop_begin; loop_end
+_memclr_vec:
+    sr          g2, g0, VECLOG2
+    cmp         g2, 0
+    sl          g3, g2, VECLOG2
+    jmp.eq      _memclr_tail32
+    subS        g0, g0, g3
+    nop
+    set.loop    g2, 1
+    clr.vra;    clr r0
+    sta.laddr   [a0]+1; loop_begin; loop_end;
+_memclr_tail32:
+    sr          g2, g0, 1
+    cmp         g2, 0
+    sl          g3, g2, 1
+    jmp.eq      _memclr_tail16
+    subS        g0, g0, g3
+    nop
+    set.loop    g2, 1
+    nop
+    sts         [a0]+2*SIZEMAU, g7; loop_begin; loop_end;
+_memclr_tail16:
+    cmp         g0, 0
+    nop
+    jmp.eq      _memclrend
+    nop
+    nop
+    sth         [a0]+SIZEMAU, g7
+_memclrend:
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memclr_end:
+_memclrcirc_end:
+
+// -----------------------------------------------------------------------------
+//  void memclr16circ(void *s, size_t n, void *b, size_t s)
+//  void memclr16(void *s, size_t n)
+//
+//  Clear half words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  number of half words to set.
+//      g1  number of half words in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _memclr16
+    .type       _memclr16, %function
+    .size       _memclr16, _memclr16_end - _memclr16
+
+    .global     _memclr16circ
+    .type       _memclr16circ, %function
+    .size       _memclr16circ, _memclr16circ_end - _memclr16circ
+
+    .section    .text.vcpu, "ax", %progbits
+_memclr16circ:
+    set.range   a0, a1, g1
+_memclr16:
+    set.loop    g0, 1
+    mv          g0, 0
+    sth         [a0]+SIZEMAU, g0; loop_begin; loop_end;
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memclr16_end:
+_memclr16circ_end:
+
+// -----------------------------------------------------------------------------
+//  void memclr32circ(void *s, size_t n, void *b, size_t s)
+//  void memclr32(void *s, size_t n)
+//
+//  Clear words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  number of words to set.
+//      g1  number of words in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _memclr32
+    .type       _memclr32, %function
+    .size       _memclr32, _memclr32_end - _memclr32
+
+    .global     _memclr32circ
+    .type       _memclr32circ, %function
+    .size       _memclr32circ, _memclr32circ_end - _memclr32circ
+
+    .section    .text.vcpu, "ax", %progbits
+_memclr32circ:
+    set.range   a0, a1, g1
+_memclr32:
+    set.loop    g0, 1
+    mv          g0, 0
+    sts         [a0]+2*SIZEMAU, g0; loop_begin; loop_end;
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memclr32_end:
+_memclr32circ_end:
+
+// -----------------------------------------------------------------------------
+//  void memclrveccirc(void *s, size_t n, void *b, size_t s)
+//  void memclrvec(void *s, size_t n)
+//
+//  Clear vectors in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  number of vectors to set.
+//      g1  number of vectors in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _memclrvec
+    .type       _memclrvec, %function
+    .size       _memclrvec, _memclrvec_end - _memclrvec
+
+    .global     _memclrveccirc
+    .type       _memclrveccirc, %function
+    .size       _memclrveccirc, _memclrveccirc_end - _memclrveccirc
+
+    .section    .text, "ax", %progbits
+_memclrveccirc:
+    set.range   a0, a1, g1
+_memclrvec:
+    set.loop    g0, 1
+    clr.vra;    clr r0
+    sta.laddr   [a0]+1; loop_begin; loop_end;
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memclrvec_end:
+_memclrveccirc_end:
+
+    .global     _veccpy
+    .type       _veccpy, %function
+    .size       _veccpy, _veccpy_end - _veccpy
+
+    .section    .text, "ax", %progbits
+_veccpy:
+    mv a2, g0;          ld.laddr [a1]+1
+    set.loop a2, 2
+    clr.VRA;            ld.laddr [a1]+1
+                                            ld.normal R0
+                        ld.laddr [a1]+1;                    loop_begin
+                        st.laddr [a0]+1;    ld.normal R0;   loop_end
+    rts
+    fnop
+    fnop
+_veccpy_end:
+
+// -----------------------------------------------------------------------------
+//  void memcpy32_circw2v(void *d, void *s, size_t n, void *b, size_t nc)
+//  void memcpy32_w2v(void *d, void *s, size_t n)
+//
+//  Clear vectors in data memory.
+//
+//  Parameters:
+//      a0  destination memory address.
+//      a1  source data memory address.
+//      a2  source circular buffer base address.
+//      g0  number of vectors to copy.
+//      g1  number of addressable units in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _memcpy32_w2v
+    .type       _memcpy32_w2v, %function
+    .size       _memcpy32_w2v, _memcpy32_w2v_end - _memcpy32_w2v
+
+    .global     _memcpy32_circw2v
+    .type       _memcpy32_circw2v, %function
+    .size       _memcpy32_circw2v, _memcpy32_circw2v_end - _memcpy32_circw2v
+
+    .section    .text, "ax", %progbits
+_memcpy32_circw2v:
+    set.range a1, a2, g1
+_memcpy32_w2v:
+	set.loop g0, 3;
+    ld.laddr [a1]+1;
+    ld.laddr [a1]+0
+    clr.VRA
+    ld.laddr [a1]+1;    ld.h2l R0;  loop_begin
+    ld.laddr [a1]+0;    ld.l2h R0
+    st.laddr [a0]+1;                loop_end
+    rts
+    mv          a0, 0
+    set.range   a1, a0, 0
+_memcpy32_circw2v_end:
+_memcpy32_w2v_end:
+
+// -----------------------------------------------------------------------------
+// void memcpy32_v2w(void *d, void *s, size_t n)
+//
+// Vector copy from aligned input DMEM to aligned/unaligned output DMEM
+//
+// Parameters:
+//      a0  destination memory address.
+//      a1  source data memory address.
+//      g0  number of half words to copy.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//  	g1, g2, g3, g4, g5, g6
+// -----------------------------------------------------------------------------
+
+    .section    .text, "ax", %progbits
+
+    .global _memcpy32_v2w
+    .type _memcpy32_v2w, @function
+    .size _memcpy32_v2w, _memcpy32_v2w_end - _memcpy32_v2w
+
+_memcpy32_v2w:
+// a0 - output buffer pointer;     a1 - input buffer pointer;    g0 - No.of words to be copied
+    mv g1, a0;
+    andD g1, 0x7F;										// g1 = mod(a0, 128)
+    mv g5,g1;              ld [a0]+0;
+    rsub g1, 128;										// g1 = 128 - mod(a0, 128) = N_1; Load original first line of output
+	sr g3,g1,1;											// ---- g3 is converted ...converting into halfword addressing
+    subS.ucc g2, g0, g3;								// g2 = N - N_1; set condition flag
+    andD g1, 0x7F;										// Set g1 = 0, if g1 = 64                                                                                                                                                      // Set g1 = 0, if g1 = 128  --- Set g1 = 0, if g1 = 64
+	sr g5,g5,1;											// convert it into halfwords
+    cmp g1,0;
+    clr.VRA;                 ld [a1]+g1;
+                             ld [a1]+0;			 ld.normal R0;
+    add g5,g5,g0;
+    jmp.ne COPY_OFFSET:
+	sr g3, g2, 6;			ld.l2h R0;					//g3 = floor((N-N_1)/64) = L
+	andD g4, g2, 0x3F;									//g4 = N_2 = mod(N-N_1,64)
+	add a1,a1,64*UPHW; 		ld.normal R0;      			// Aligned Inclusion(should be after 2 instruction)
+COPY_OFFSET:
+	cmp g5,64;											// comparing with 64 half words
+	add g6,g5,-1;
+	jmp.gt COUNT_DMEM_LINES:
+	fnop;
+							ld.laddr [a1]+1;
+	jmp DONE;											// jump to done if N_1 >= N
+	st.low [a0]+g5, g6;
+	nop;
+COUNT_DMEM_LINES:
+	andD.gt g5, g3, 1;									// g5 = mod(g3, 2)
+	sr g6, g3, 1;										// Loop count = g5 = floor(L/2)
+							ld.laddr [a1]+1;
+	cmpS.Z g3, 0;										// Check for L = 0
+	st.laddr [a0]+1;		ld.h2l R0;
+	ld.laddr [a1]+1;		ld.l2h_h2l R0;
+	jmp.eq LAST_LINE;
+	cmpS.Z g3, 1;										//Check for L = 1
+	cmpS.Z g5, 0;										//Check for odd L
+	jmp.eq ONE_LINE;
+	fnop;
+	fnop;
+	jmp.eq EVEN_LINES;
+	set.loop g6, 4;
+	fnop;
+ODD_LINES:
+							ld.laddr [a1]+1;						loop_begin;
+	setB.VRAptr rSt, 1;		st.laddr [a0]+1;		ld.h2l_l2h R0;
+							ld.laddr [a1]+1;
+	setB.VRAptr rSt, 0;		st.laddr [a0]+1;		ld.l2h_h2l R0;	loop_end;
+ONE_LINE:
+	jmp LAST_LINE;
+	setB.VRAptr rSt, 1;		st.laddr [a0]+1;		ld.h2l_l2h R0;
+	fnop;
+EVEN_LINES:
+							ld.laddr [a1]+1;						loop_begin;
+	setB.VRAptr rSt, 1;		st.laddr [a0]+1;		ld.h2l_l2h R0;
+							ld.laddr [a1]+1;
+	setB.VRAptr rSt, 0;		st.laddr [a0]+1;		ld.l2h_h2l R0;	loop_end;
+LAST_LINE:
+	cmp g4,0x0;											// Helps to handle cases in aligned output buf
+	add g3,g4,-1;
+	jmp.eq DONE:
+	fnop;
+	fnop;
+	st.low [a0]+g4, g3;									// write last N_2 words on last DMEM line
+DONE:
+	rts;
+	fnop;
+	fnop;
+_memcpy32_v2w_end:
+
+// -----------------------------------------------------------------------------
+//  void veccpy32(void *restrict d, void const *restrict s, size_t n);
+//
+//  Copy a vector-aligned array to 32-bit aligned array.
+//
+//  Parameters:
+//      a0  Destination address, 32-bit aligned.
+//      a1  Source address, vector-aligned.
+//      g0  Number of 16-bit data to copy.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      g1
+// -----------------------------------------------------------------------------
+
+    .global     _veccpy32
+    .type       _veccpy32, %function
+    .size       _veccpy32, _veccpy32_end - _veccpy32
+
+    .section    .text, "ax", %progbits
+_veccpy32:
+    sr          g1, g0, NLANE2VEC32                                             // g1 = number of vectors to copy.
+    cmp         g1, 0                                                           // Make sure g1 > 0.
+    and         g0, g0, NLANE32 - 1                                             // g0 = number of trailing 32-bit data to copy.
+    jmp.le      _veccpy32_data                                                  // Jump if g1 <= 0.
+    ld.laddr    [a1]+1                                                          // Load vector from memory.
+    clr.VRA                                                                     // Clear VRA pointers and increments.
+_veccpy32_vec:      // Copy vectors --------------------------------------------
+    set.loop    g1, 5                                                           // Copy g1 vectors.
+    set.rot     R0R1r2                                                          // Rotate right by 32 bits.
+    ld.normal   R0;                             loop_begin                      // Load vector into R0.
+    set.loop    NLANE32, 1                                                      // Copy 32 32-bit data per vector.
+    ld.laddr    [a1]+1                                                          // Load next vector.
+    st.w        [a0]+2*SIZEMAU; ror;            loop_begin; loop_end            // Store R0[0]; R0 >>= 1.
+    nop
+    nop
+    nop;                                        loop_end                        // Pipeline restriction.
+_veccpy32_data:     // Copy trailing 32-bit data -------------------------------
+    cmp         g0, 0                                                           // Make sure g0 > 0.
+    set.rot     R0R1r2                                                          // Rotate right by 32 bits.
+    jmp.le      _veccpy32_epilog                                                // Jump if g0 <= 0.
+    set.loop    g0, 1                                                           // Copy g0 trailing 32-bit data.
+    ld.normal   R0                                                              // Load vector into R0.
+    st.w       [a0]+2*SIZEMAU;  ror;            loop_begin; loop_end            // Store R0[0]; R0 >>= 1.
+_veccpy32_epilog:
+    rts
+    fnop
+    fnop
+_veccpy32_end:
+
+// -----------------------------------------------------------------------------
+//  void veccpy16(void *restrict d, void const *restrict s, size_t n);
+//
+//  Copy a vector-aligned array to 16-bit aligned array.
+//
+//  Parameters:
+//      a0  Destination address, 16-bit aligned.
+//      a1  Source address, vector-aligned.
+//      g0  Number of 16-bit data to copy.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      g1
+// -----------------------------------------------------------------------------
+
+    .global     _veccpy16
+    .type       _veccpy16, %function
+    .size       _veccpy16, _veccpy16_end - _veccpy16
+
+    .section    .text, "ax", %progbits
+_veccpy16:
+    sr          g1, g0, VECLOG2                                                 // g1 = number of vectors to copy.
+    cmp         g1, 0                                                           // Make sure g1 > 0.
+    and         g0, g0, (__AU_COUNT__ * 4) - 1                                  // g0 = number of trailing 16-bit data to copy.
+    jmp.le      _veccpy16_data                                                  // Jump if g1 <= 0.
+    ld.laddr    [a1]+1                                                          // Load vector from memory.
+    clr.VRA                                                                     // Reset all VRA pointers and increments.
+_veccpy16_vec:      // Copy vectors --------------------------------------------
+    set.loop    g1, 8                                                           // Copy g1 vectors.
+    set.rot     R0R1r1                                                          // Rotate right by 16 bits.
+    ld.normal   R0;                             loop_begin                      // Load vector into R0.
+    set.loop    __AU_COUNT__ * 2, 4                                             // Copy 2x32 16-bit data per vector.
+    ld.laddr    [a1]+1                                                          // Load next vector.
+    mv.h        g1, [rS0];      ror;                                loop_begin  // g1 = R0[0] & 0x0000FFFF.
+    mv.h        g1, [rS0];      ror                                             // g1 = (R0[0] & 0xFFFF0000) >> 16; R0 >>= 1.
+    sth         [a0]+SIZEMAU, g1                                                // Store R0[0] & 0x0000FFFF.
+    sth         [a0]+SIZEMAU, g1;                                   loop_end    // Store (R0[0] & 0xFFFF0000) >> 16.
+    nop;                                        loop_end                        // Pipeline restriction.
+_veccpy16_data:     // Copy trailing 16-bit data -------------------------------
+    sr          g1, g0, 1                                                       // g1 = 1/2 * number of trailing 16-bit data to copy.
+    cmp         g1, 0                                                           // Make sure g1 > 0.
+    set.rot     R0R1r1                                                          // Rotate right by 16 bits.
+    jmp.le      _veccpy16_epilog                                                // Jump if g1 <= 0.
+    set.loop    g1, 4                                                           // Copy 2*g1 trailing 16-bit data.
+    ld.normal   R0                                                              // Load vector into R0.
+    mv.h        g1, [rS0];      ror;                                loop_begin  // g1 = R0[0] & 0x0000FFFF.
+    mv.h        g1, [rS0];      ror                                             // g1 = (R0[0] & 0xFFFF0000) >> 16; R0 >>= 1.
+    sth         [a0]+SIZEMAU, g1                                                // Store R0[0] & 0x0000FFFF.
+    sth         [a0]+SIZEMAU, g1;                                   loop_end    // Store (R0[0] & 0xFFFF0000) >> 16.
+_veccpy16_epilog:
+    rts
+    fnop
+    fnop
+_veccpy16_end:
+
+// -----------------------------------------------------------------------------
+//  uint32_t errno;
+// -----------------------------------------------------------------------------
+
+    .global     _errno
+    .type       _errno, %object
+    .size       _errno, _errno_end - _errno
+
+    .section    .bss.vcpu
+    .align      2
+_errno:
+    .word       0
+_errno_end:
+
+// -----------------------------------------------------------------------------
+//  void delay_cycle(int delay)
+//
+//  Perform a delay of <delay> cycles.
+//
+//  Parameters:
+//      g0  Number of cycles (6 < delay < 65543).
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      g0.
+// -----------------------------------------------------------------------------
+
+    .global     _delay_cycle
+    .type       _delay_cycle, %function
+    .size       _delay_cycle, _delay_cycle_end - _delay_cycle
+
+    .section    .text.vcpu, "ax", %progbits
+_delay_cycle:
+    sub         g0, 6;
+    set.loop    g0, 1
+    fnop
+    fnop;       loop_begin; loop_end
+    rts;
+    fnop;
+    fnop;
+_delay_cycle_end:
+
+// -----------------------------------------------------------------------------
+// ccnt_t ccnt_offset
+// -----------------------------------------------------------------------------
+    .global     _ccnt_offset
+    .type       _ccnt_offset, %object
+    .size       _ccnt_offset, 8
+    .section    .bss.vcpu
+_ccnt_offset:
+    .word       0
+    .word       0
+
+// -----------------------------------------------------------------------------
+// ccnt_t ccnt_section_offset
+// -----------------------------------------------------------------------------
+    .global     _ccnt_section_offset
+    .type       _ccnt_section_offset, %object
+    .size       _ccnt_section_offset, 8
+    .section    .bss.vcpu
+_ccnt_section_offset:
+    .word       0
+    .word       0
+
+
+// -----------------------------------------------------------------------------
+//  void rts_only (void) __noreturn
+//
+//  VSPA application function.
+//
+//  Parameters:
+//      None.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//
+// -----------------------------------------------------------------------------
+    .global     _rts_only
+    .weak       _rts_only
+    .type       _rts_only, %function
+    .size       _rts_only, _rts_only_end - _rts_only
+
+    .section    .text.vcpu, "ax", %progbits
+
+_rts_only:
+    rts;
+    fnop;
+    fnop;
+_rts_only_end:
+
+#endif // __VSPA3__
