@@ -59,6 +59,24 @@ vspa_complex_fixed16 *p_tx_axiq_consumed = &output_buffer[0];
 uint32_t rd_ddr_src_ptr = 0xcafedeca;
 uint32_t DDR_rd_counter;
 
+void axiq_tx_first_initialize() {
+    axiq_tx_disable();
+    stream_write_ptr_rst(DMA_CHANNEL_WR, axi_wr);
+    WAIT(dmac_is_complete(0x1 << DMA_CHANNEL_WR));
+    dmac_clear_complete(0x1 << DMA_CHANNEL_WR);
+
+    // PHYTimer 11 (Tx_DMA_allowed) triggers has to be set to 1 at this point.
+    // Need to do some AXIO write with first enabling Tx_DMA_allowed, and only then starting Tx AXIQ
+    // without this intial procedure, DMA transfers to DAC will stall if Tx_DMA_allowed is asserted after AXIQ is enabled.
+    // Once this this is done, Tx_DMA_allowed and TxAXIQ enable can be done in any order.
+    // Even though the dummy_stream_write() transfer does not use Tx_DMA_allowed, for some reason Tx_DMA_allowed has to be asserted
+    // otherwise this workaround has no effect for the mentioned issue.
+    axiq_fifo_tx_enable(AXIQ_BANK_0, AXIQ_FIFO_TX0);
+
+    stream_write(DMA_CHANNEL_WR, axi_wr, 2 * (uint32_t)(output_buffer));
+    WAIT(dmac_is_complete(0x1 << DMA_CHANNEL_WR));
+}
+
 void DDR_read_multi_dma(uint32_t DDR_rd_dma_channel, uint32_t nb_dma, uint32_t DDR_address, uint32_t vsp_address,
                         int32_t bytes_size) {
     uint32_t i;

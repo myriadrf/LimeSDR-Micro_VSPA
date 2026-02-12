@@ -44,6 +44,8 @@
 
 #include "txiqcomp.h"
 
+void axiq_tx_first_initialize();
+
 void DDR_read(uint32_t DDR_rd_dma_channel, uint32_t DDR_address, uint32_t vsp_address, int32_t bytes_size);
 void tx_qec_correction(vspa_complex_fixed16 *dataIn, vspa_complex_fixed16 *dataOut);
 void TX_IQ_DATA_FROM_DDR(void);

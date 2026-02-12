@@ -46,7 +46,7 @@ uint32_t TX_SingleT_start_bit_update = 0, RX_SingleT_start_bit_update = 0, RX_Si
  * chanID                  0           1           2           3            >  mbx API chanID
  * RFNM slot_chan          RBA_RX1     RBA_RX2     RBB_RX1     RBB_RX2      >  RFNM slot mapping
  * LA9310 chan             RO1         RX1         RO0         RX0
- * VSPA DMA chanID 		   2           4           1           3
+ * VSPA DMA chanID         2           4           1           3
  * axi_ADC_FIFI_addr[4] = {0x44002000, 0x44004000, 0x44001000, 0x44003000};
  */
 
@@ -152,11 +152,8 @@ void setup(void) {
     axi_wr = 0x4400B000;
 
 #ifndef IQMOD_RX_0T1R
-    stream_write_ptr_rst(DMA_CHANNEL_WR, axi_wr);
-    WAIT(dmac_is_complete(0x1 << DMA_CHANNEL_WR));
-    dmac_clear_complete(0x1 << DMA_CHANNEL_WR);
+    axiq_tx_first_initialize();
 #endif
-
     host_clear();
     host_mbox0_enable();
     host_mbox1_enable();
@@ -474,8 +471,8 @@ __attribute__((noreturn)) void main(void) {
 
             case MBOX_OPC_PROXY_OFFSET:
                 uint32_t proxy_offset_read_only = ((mailbox_in_msg_0_MSB & 0x00100000) >> 20); /* bit 52 */
-                if(!proxy_offset_read_only){
-            	    g_iqflood_proxy_offset = mailbox_in_msg_0_LSB;
+                if (!proxy_offset_read_only) {
+                    g_iqflood_proxy_offset = mailbox_in_msg_0_LSB;
                     tx_proxy_updated = 1;
                     rx_proxy_updated = 1;
                     tx_vspa_proxy.gbl_stats_fetch = 1;
@@ -484,7 +481,7 @@ __attribute__((noreturn)) void main(void) {
                 mailbox_out_msg_0_LSB = 0x1;
                 host_mbox0_post(MAKEDWORD(mailbox_out_msg_0_MSB, mailbox_out_msg_0_LSB));
                 break;
-                
+
             default:
                 // not a valid command, NACK
                 mailbox_out_msg_0_MSB = 0x0;
@@ -535,7 +532,7 @@ __attribute__((noreturn)) void main(void) {
     __asm volatile("fnop .asmvol");
     __asm volatile("fnop .asmvol");
 
-    //	__swbreak();
+    // __swbreak();
     while (dbg_gbl == 2) {
     };
     __builtin_done();

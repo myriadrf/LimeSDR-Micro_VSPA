@@ -43,11 +43,11 @@ static uint32_t host_flow_control_disable = 1;
 #define DDR_rd_size (tx_vspa_proxy.DDR_rd_size)
 
 #define TX_total_ddr_ready_size (tx_vspa_proxy.host_produced_size)          /* -1: DDR data ready */
-static uint32_t TX_total_ddr_enqueued_size = 0;                             /* 0: DDR dma fifo cmd 	*/
+static uint32_t TX_total_ddr_enqueued_size = 0;                             /* 0: DDR dma fifo cmd  */
 #define TX_total_ddr_fetched_size (tx_vspa_proxy.la9310_fifo_enqueued_size) /* 1: DDR dma completed */
-#define TX_total_dmem_QECced_size (tx_vspa_proxy.la9310_fifo_consumed_size) /* 2: QEC completed	 	*/
-static uint32_t TX_total_axiq_enqueued_size = 0;                            /* 3: Axiq Tx in fifo cmd	*/
-static uint32_t TX_total_axiq_consumed_size = 0;                            /* 4: Axiq Tx completed	*/
+#define TX_total_dmem_QECced_size (tx_vspa_proxy.la9310_fifo_consumed_size) /* 2: QEC completed     */
+static uint32_t TX_total_axiq_enqueued_size = 0;                            /* 3: Axiq Tx in fifo cmd   */
+static uint32_t TX_total_axiq_consumed_size = 0;                            /* 4: Axiq Tx completed */
 
 vspa_complex_fixed16 *p_tx_ddr_enqueued = &output_buffer[0];
 vspa_complex_fixed16 *p_tx_ddr_fetched = &output_buffer[0];
@@ -61,6 +61,24 @@ vspa_complex_fixed16 *p_tx_axiq_consumed = &output_qec_buffer[0];
 
 uint32_t rd_ddr_src_ptr = 0xcafedeca;
 uint32_t DDR_rd_counter;
+
+void axiq_tx_first_initialize() {
+    axiq_tx_disable();
+    stream_write_ptr_rst(DMA_CHANNEL_WR, axi_wr);
+    WAIT(dmac_is_complete(0x1 << DMA_CHANNEL_WR));
+    dmac_clear_complete(0x1 << DMA_CHANNEL_WR);
+
+    // PHYTimer 11 (Tx_DMA_allowed) triggers has to be set to 1 at this point.
+    // Need to do some AXIO write with first enabling Tx_DMA_allowed, and only then starting Tx AXIQ
+    // without this intial procedure, DMA transfers to DAC will stall if Tx_DMA_allowed is asserted after AXIQ is enabled.
+    // Once this this is done, Tx_DMA_allowed and TxAXIQ enable can be done in any order.
+    // Even though the dummy_stream_write() transfer does not use Tx_DMA_allowed, for some reason Tx_DMA_allowed has to be asserted
+    // otherwise this workaround has no effect for the mentioned issue.
+    axiq_fifo_tx_enable(AXIQ_BANK_0, AXIQ_FIFO_TX0);
+
+    stream_write(DMA_CHANNEL_WR, axi_wr, 2 * (uint32_t)(output_buffer));
+    WAIT(dmac_is_complete(0x1 << DMA_CHANNEL_WR));
+}
 
 void DDR_read_multi_dma(uint32_t DDR_rd_dma_channel, uint32_t nb_dma, uint32_t DDR_address, uint32_t vsp_address,
                         int32_t bytes_size) {
@@ -123,12 +141,12 @@ void TX_IQ_DATA_FROM_DDR(void) {
         if (!ddr_rd_dma_ch_nb) {
             /* LA9310 AXI bus supports 4 opened RD transactions
              * Read measurements ( wo/ multi-burst):
-             *  2x VSPA DMA read	DDR	393MB/s       <-- default
-             *  4x VSPA DMA read	DDR	590MB/s
+             *  2x VSPA DMA read    DDR 393MB/s       <-- default
+             *  4x VSPA DMA read    DDR 590MB/s
              * Read measurements ( w/ multi-burst):
-             *  1x VSPA DMA read	DDR	480MB/s
-             *  2x VSPA DMA read	DDR	??MB/s
-             *  4x VSPA DMA read	DDR	825MB/s
+             *  1x VSPA DMA read    DDR 480MB/s
+             *  2x VSPA DMA read    DDR ??MB/s
+             *  4x VSPA DMA read    DDR 825MB/s
              * 4 channels will cause AXIQ FIFO read starvation if rx is also running
              */
             ddr_rd_dma_mBurst = 0;
@@ -137,12 +155,15 @@ void TX_IQ_DATA_FROM_DDR(void) {
 
         ddr_rd_dma_ch_mask = dma_chan_mask(DDR_RD_DMA_CHANNEL_1, ddr_rd_dma_ch_nb);
 
+        dmac_clear_complete(ddr_rd_dma_ch_mask);
+        dmac_clear_event(ddr_rd_dma_ch_mask);
+
         DDR_rd_counter = 0;
         ddr_rd_dma_xfr_size = TX_DDR_STEP;
 
-        if (0 == TX_total_ddr_ready_size) {
-            TX_total_ddr_ready_size = TX_NUM_BUF * TX_DDR_STEP;
-        }
+        // if(0==TX_total_ddr_ready_size) {
+        //  TX_total_ddr_ready_size = TX_NUM_BUF*TX_DDR_STEP ;
+        //  }
         TX_total_ddr_enqueued_size = 0;
         TX_total_ddr_fetched_size = 0;
         TX_total_dmem_QECced_size = 0;
@@ -173,6 +194,9 @@ void TX_IQ_DATA_FROM_DDR(void) {
 
             return;
         }
+
+        // before TX_allowed is asserted, DMA already transfers data with a size equal to FIFO size, after that when TX_allowed is
+        // asserted, DAC starts consuming data from FIFO.
 
         // stop single tone
         TX_SingleT_start_bit_update = 0;
@@ -209,10 +233,24 @@ void TX_IQ_DATA_FROM_DDR(void) {
 
     if (cmd_start == 0) /* stop */
     {
+        // The TX completes it’s transmission when two events occur:
+        // A falling edge is detected on the tx_allowed signal.
+        // The TX receives a ptr_rst_req from the DMA.
+        // Both events must occur (in any order)
+
+        uint32_t dma_channels_to_abort = ddr_rd_dma_ch_mask;
         if (!TX_SingleT_start_bit_update) {
+            dma_channels_to_abort |= 0x1 << DMA_CHANNEL_WR;
             axiq_tx_disable();
-            dmac_abort(0x1 << DMA_CHANNEL_WR);
-            dmac_clear_complete(0x1 << DMA_CHANNEL_WR);
+            dmac_abort(dma_channels_to_abort);
+
+            do {
+#ifndef IQMOD_RX_1T0R
+                PUSH_RX_DATA();
+#endif
+            } while (dmac_is_running(dma_channels_to_abort));
+
+            dmac_clear_complete(dma_channels_to_abort);
             dmac_clear_event(0x1 << DMA_CHANNEL_WR);
         }
         mailbox_out_msg_0_MSB = 0;
