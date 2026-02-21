@@ -37,7 +37,7 @@ enum axiq_ls_fifo_tx_e {
 // =============================================================================
 
 //! @brief      Number of right-shifts to right-justify the FIFO control bits.
-#define AXIQ_LS_CR_SHIFT(fifo) ((fifo)*8)
+#define AXIQ_LS_CR_SHIFT(fifo) ((fifo) * 8)
 
 // RX FIFO control register (CR0) definitions:
 #define AXIQ_LS_CR_SHIFT_RX0 0
@@ -134,7 +134,7 @@ enum axiq_ls_fifo_tx_e {
 // Status register:
 // =============================================================================
 
-#define AXIQ_LS_SR_SHIFT(fifo) ((fifo)*8)
+#define AXIQ_LS_SR_SHIFT(fifo) ((fifo) * 8)
 
 // RX FIFO status register (SR0) definitions:
 #define AXIQ_LS_SR_SHIFT_RX0 0

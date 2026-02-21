@@ -59,8 +59,8 @@ extern uint32_t tx_proxy_updated;
 #define DDR_RD_DMA_CHANNEL_2 0x8
 #define DDR_RD_DMA_CHANNEL_3 0x9
 #define DDR_RD_DMA_CHANNEL_4 0xa
-//#define DDR_RD_DMA_CHANNEL_MASK 0x00000180
-//#define DDR_RD_DMA_CHANNEL_MASK 0x00000780
+// #define DDR_RD_DMA_CHANNEL_MASK 0x00000180
+// #define DDR_RD_DMA_CHANNEL_MASK 0x00000780
 
 #define DMA_CHANNEL_WR 0xb
 

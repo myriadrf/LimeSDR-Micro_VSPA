@@ -16,8 +16,8 @@
 #include "iohw.h"
 #include "dmac.h"
 #include "axiq.h"
-//#include "bitRev.h"
-//#include "la9310.h"
+// #include "bitRev.h"
+// #include "la9310.h"
 
 /* parameters */
 
@@ -94,7 +94,7 @@ typedef enum {
     MBOX_OPC_GET_STATS_COUNT, // 0xF
     MBOX_OPC_DONE_SWRESET,    // 0x10
     MBOX_OPC_PROXY_OFFSET     // 0x11
-   
+
 } mbox_opc_e;
 
 void PUSH_TX_DATA(void);

@@ -183,7 +183,7 @@ extern uint32_t ippu_base[];
 
 static inline uint32_t ippu_dmem_base(void) { return vcpu_dmem_size(); }
 
-#define IPPU_OFFSET(addr) ((uint32_t)(addr)-ippu_dmem_base())
+#define IPPU_OFFSET(addr) ((uint32_t)(addr) - ippu_dmem_base())
 
 #pragma cplusplus on
 static inline uint32_t ippu_swver(void) { return iord(IPPUSWVER); }

@@ -47,8 +47,8 @@
 #define CCSR_BASE_PCIE (BASE_CCSR + 0x3400000)        /**< PCIexpress Controller PF0 base address.        */
 #define CCSR_BASE_PCIE_CTRL (BASE_CCSR + 0x34C0000)   /**< PCI express Controller PFO controls.           */
 
-#define BASE_AXIQ(bank) (BASE_AXIQ_L0 + ((bank)*0x00010000))
-#define BASE_VSPA(core) (BASE_VSPA0 + ((core)*0x00400000))
+#define BASE_AXIQ(bank) (BASE_AXIQ_L0 + ((bank) * 0x00010000))
+#define BASE_VSPA(core) (BASE_VSPA0 + ((core) * 0x00400000))
 
 #define SIZE_DTCM (128 * 1024)                 /**< Data TCM byte size.            */
 #define SIZE_PCIE1_TARGET (1024 * 1024 * 1024) /**< Host memory byte size.         */

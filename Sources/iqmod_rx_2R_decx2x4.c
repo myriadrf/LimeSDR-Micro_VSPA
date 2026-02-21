@@ -229,7 +229,7 @@ fail_rx_iq_data:
     return;
 }
 
-//#pragma optimize_for_size off
+// #pragma optimize_for_size off
 volatile uint32_t rx_busy_size = 0;
 void PUSH_RX_DATA(void) {
     uint32_t tmp_status, i;

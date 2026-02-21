@@ -36,8 +36,8 @@
 #define BASE_CCSR 0xF8000000         //!< Configuration, Control and Status Register address space.
 #define BASE_DCSR 0xFC000000         //!< Debug Control and Status Register address space.
 
-#define BASE_AXIQ(bank) (BASE_AXIQ_L0 + ((bank)*0x00010000))
-#define BASE_VSPA(core) (BASE_VSPA0 + ((core)*0x00400000))
+#define BASE_AXIQ(bank) (BASE_AXIQ_L0 + ((bank) * 0x00010000))
+#define BASE_VSPA(core) (BASE_VSPA0 + ((core) * 0x00400000))
 
 #define SIZE_PEBM (1024 * 1024 * 2) //!< 2MiB.
 

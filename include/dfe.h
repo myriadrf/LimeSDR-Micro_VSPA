@@ -19,8 +19,8 @@
  *   txiqcomp			 IQ phase and amplitude compensation
  *   txiqcomp_x32chf_5t  IQ phase and amplitude + IQ fractional delay compensation
  */
-//#define TXIQCOMP2
-//#define RXIQCOMP2
+// #define TXIQCOMP2
+// #define RXIQCOMP2
 #define TXIQCOMP
 #define RXIQCOMP
 

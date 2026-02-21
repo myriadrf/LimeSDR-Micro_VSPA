@@ -541,7 +541,7 @@ static inline int __max(int a, int b)
 //! @param      x   the dividend.
 //! @param      y   the divisor.
 //! @return     The ceiled quotient: ceil(x/y).
-#define DIV_CEIL(x, y) (((x) + (y)-1) / (y))
+#define DIV_CEIL(x, y) (((x) + (y) - 1) / (y))
 
 //! @brief      Rounded division.
 //! @param      x   the dividend.
@@ -629,7 +629,7 @@ static inline int ctz32(uint32_t word) {
 //! @brief      Extract the least significant byte from a half-word.
 //! @param      hw  the half-word.
 //! @return     The least significant byte from @a hw.
-#define LOBYTE(hw) ((hw)&0x00FF)
+#define LOBYTE(hw) ((hw) & 0x00FF)
 
 //! @brief      Extract the most significant byte from a half-word.
 //! @param      hw  the half-word.
@@ -639,7 +639,7 @@ static inline int ctz32(uint32_t word) {
 //! @brief      Extract the least significant half-word from a word.
 //! @param      w   the word.
 //! @return     The least significant half-word from @a w.
-#define LOHWORD(w) ((w)&0x0000FFFF)
+#define LOHWORD(w) ((w) & 0x0000FFFF)
 
 //! @brief      Extract the most significant half-word from a word.
 //! @param      w   the word.
@@ -649,7 +649,7 @@ static inline int ctz32(uint32_t word) {
 //! @brief      Extract the least significant word from a double-word.
 //! @param      dw  the double-word.
 //! @return     The least significant word from @a dw.
-#define LOWORD(dw) ((dw)&0x00000000FFFFFFFFULL)
+#define LOWORD(dw) ((dw) & 0x00000000FFFFFFFFULL)
 
 //! @brief      Extract the most significant word from a double-word.
 //! @param      dw  the double-word.

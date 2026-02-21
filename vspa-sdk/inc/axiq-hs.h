@@ -35,7 +35,7 @@ enum axiq_hs_fifo_e {
 #define AXIQ_HS_CR_TX_SHIFT 16
 
 //! @brief      Number of right-shifts to right-justify the FIFO control bits.
-#define AXIQ_HS_CR_SHIFT(bank, fifo) ((fifo)*16)
+#define AXIQ_HS_CR_SHIFT(bank, fifo) ((fifo) * 16)
 
 #define AXIQ_HS_CR_SHIFT_RX(bank, fifo) AXIQ_HS_CR_SHIFT(bank, fifo)
 #define AXIQ_HS_CR_SHIFT_TX(bank, fifo) AXIQ_HS_CR_SHIFT(bank, fifo)
@@ -90,7 +90,7 @@ enum axiq_hs_fifo_e {
 // Status register:
 // =============================================================================
 
-#define AXIQ_HS_SR_SHIFT(bank, fifo) (((bank)*16) + ((fifo)*8))
+#define AXIQ_HS_SR_SHIFT(bank, fifo) (((bank) * 16) + ((fifo) * 8))
 
 #define AXIQ_HS_SR_SHIFT_RX(bank, fifo) AXIQ_HS_SR_SHIFT(bank, AXIQ_HS_FIFO_RX)
 #define AXIQ_HS_SR_SHIFT_TX(bank, fifo) AXIQ_HS_SR_SHIFT(bank, AXIQ_HS_FIFO_TX)

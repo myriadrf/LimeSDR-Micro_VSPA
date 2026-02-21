@@ -57,26 +57,26 @@ enum axiq_ls_bank_e {
 // -----------------------------------------------------------------------------
 
 //! @brief      AXIQ RX control register address.
-#define AXIQ_LS_RX_CR(bank) GPO(((bank)*2) + GPIO_AXIQ_L0_CR0)
+#define AXIQ_LS_RX_CR(bank) GPO(((bank) * 2) + GPIO_AXIQ_L0_CR0)
 
 //! @brief      AXIQ TX control register address.
-#define AXIQ_LS_TX_CR(bank) GPO(((bank)*2) + GPIO_AXIQ_L0_CR1)
+#define AXIQ_LS_TX_CR(bank) GPO(((bank) * 2) + GPIO_AXIQ_L0_CR1)
 
 // -----------------------------------------------------------------------------
 // Status register:
 // -----------------------------------------------------------------------------
 
 //! @brief      AXIQ RX status register address.
-#define AXIQ_LS_RX_SR(bank) GPI(((bank)*3) + GPIO_AXIQ_L0_SR0)
+#define AXIQ_LS_RX_SR(bank) GPI(((bank) * 3) + GPIO_AXIQ_L0_SR0)
 
 //! @brief      AXIQ TX status register address.
-#define AXIQ_LS_TX_SR(bank) GPI(((bank)*3) + GPIO_AXIQ_L0_SR1)
+#define AXIQ_LS_TX_SR(bank) GPI(((bank) * 3) + GPIO_AXIQ_L0_SR1)
 
 //! @brief      DMA channel number for a given RX FIFO.
 //! @param      bank    specifies the AXIQ bank.
 //! @param      fifo    specifies the AXIQ RX FIFO.
 //! @return     The DMA channel number for the RX FIFO @a fifo.
-#define AXIQ_LS_CHAN_RX(bank, fifo) (((bank)*5) + (fifo) + 1)
+#define AXIQ_LS_CHAN_RX(bank, fifo) (((bank) * 5) + (fifo) + 1)
 
 //! @brief      DMA channel mask for a given RX FIFO.
 //! @param      bank    specifies the AXIQ bank.
@@ -93,13 +93,13 @@ enum axiq_ls_bank_e {
 //! @param      bank    specifies the AXIQ bank.
 //! @param      fifo    specifies the AXIQ RX FIFO.
 //! @return     The AXI address for the RX FIFO @a fifo.
-#define AXIQ_LS_ADDR_RX(bank, fifo) (BASE_AXIQ(bank) + ((fifo)*0x1000))
+#define AXIQ_LS_ADDR_RX(bank, fifo) (BASE_AXIQ(bank) + ((fifo) * 0x1000))
 
 //! @brief      DMA channel for a given TX FIFO.
 //! @param      bank    specifies the AXIQ bank.
 //! @param      fifo    specifies the AXIQ TX FIFO.
 //! @return     The DMA channel number for the TX FIFO @a fifo.
-#define AXIQ_LS_CHAN_TX(bank, fifo) (((bank)*5) + (fifo) + 4)
+#define AXIQ_LS_CHAN_TX(bank, fifo) (((bank) * 5) + (fifo) + 4)
 
 //! @brief      DMA channel mask for a given TX FIFO.
 //! @param      bank    specifies the AXIQ bank.
@@ -116,7 +116,7 @@ enum axiq_ls_bank_e {
 //! @param      bank    specifies the AXIQ bank.
 //! @param      fifo    specifies the AXIQ RX FIFO.
 //! @return     The AXI address for the RX FIFO @a fifo.
-#define AXIQ_LS_ADDR_TX(bank, fifo) (BASE_AXIQ(bank) + ((fifo)*0x1000))
+#define AXIQ_LS_ADDR_TX(bank, fifo) (BASE_AXIQ(bank) + ((fifo) * 0x1000))
 
 #include "axiq-ls.h"
 
@@ -156,7 +156,7 @@ enum axiq_hs_bank_e {
 #define AXIQ_HS_TX_SR(bank) GPI(GPIO_AXIQ_HS_SR1)
 
 //! @brief      HS AXIQ RX Max/Num/Sum GPIN.
-#define AXIQ_HS_RX_MAX_GPIN(bank) GPI(((bank)*2) + GPIO_AXIQ_HS_SR0)
+#define AXIQ_HS_RX_MAX_GPIN(bank) GPI(((bank) * 2) + GPIO_AXIQ_HS_SR0)
 
 //! @brief      DMA channel number for a given RX FIFO.
 //! @param      bank    specifies the AXIQ bank.
@@ -174,7 +174,7 @@ enum axiq_hs_bank_e {
 //! @param      bank    specifies the AXIQ bank.
 //! @param      fifo    specifies the AXIQ RX FIFO.
 //! @return     The AXI address for the RX FIFO @a fifo.
-#define AXIQ_HS_ADDR_RX(bank, fifo) (BASE_AXIQ_HS + ((bank)*0x8000))
+#define AXIQ_HS_ADDR_RX(bank, fifo) (BASE_AXIQ_HS + ((bank) * 0x8000))
 
 //! @brief      DMA channel for a given TX FIFO.
 //! @param      bank    specifies the AXIQ bank.
@@ -192,7 +192,7 @@ enum axiq_hs_bank_e {
 //! @param      bank    specifies the AXIQ bank.
 //! @param      fifo    specifies the AXIQ TX FIFO.
 //! @return     The AXI address for the TX FIFO @a fifo.
-#define AXIQ_HS_ADDR_TX(bank, fifo) (BASE_AXIQ_HS + ((bank)*0x8000))
+#define AXIQ_HS_ADDR_TX(bank, fifo) (BASE_AXIQ_HS + ((bank) * 0x8000))
 
 #include "axiq-hs.h"
 #include "axiq-ls.h"

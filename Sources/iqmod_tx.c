@@ -278,7 +278,7 @@ fail_tx_iq_data:
     return;
 }
 
-//#pragma optimize_for_size off
+// #pragma optimize_for_size off
 volatile uint32_t tx_busy_size = 0;
 void PUSH_TX_DATA(void) {
     uint32_t tmp_status;

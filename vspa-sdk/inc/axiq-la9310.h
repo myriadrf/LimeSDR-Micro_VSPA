@@ -35,7 +35,7 @@ enum axiq_fifo_e {
 //! @param      fifo    specifies the AXIQ FIFO.
 //! @return     The DMA channel number for the FIFO @a fifo in the AXIQ bank
 //!             @a bank.
-#define AXIQ_CHAN(bank, fifo) (((bank)*AXIQ_FIFO_CNT) + (fifo) + 1)
+#define AXIQ_CHAN(bank, fifo) (((bank) * AXIQ_FIFO_CNT) + (fifo) + 1)
 
 //! @brief      DMA channel mask for a given RX FIFO.
 //! @param      bank    specifies the AXIQ bank.
