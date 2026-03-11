@@ -194,3 +194,10 @@ void stream_read(uint32_t dma_channel_rd, uint32_t axi_rd, uint32_t vsp) {
     dmac_enable(ctrl, RX_DMA_TXR_size << 2, axi_rd, vsp);
 }
 #endif
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+void stream_write_custom_size(uint32_t dma_channel_wr, uint32_t axi_wr, uint32_t vsp, uint32_t size_bytes) {
+    uint32_t ctrl = DMAC_FIFO | DMAC_WRC | dma_channel_wr;
+    dmac_enable(ctrl, size_bytes, axi_wr, vsp);
+}
+#endif

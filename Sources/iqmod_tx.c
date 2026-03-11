@@ -26,8 +26,27 @@
 
 vspa_complex_fixed16 output_buffer[TX_NUM_BUF * TX_DMA_TXR_size] __attribute__((section(".ippu_dmem")))
 __attribute__((aligned(64))) = { 0x00000000, 0x00010001, 0x00020002, 0x00030003 };
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+vspa_complex_fixed16 interp_buffer[TX_NUM_INTERP_BUF * TX_INTERP_SIZE] __attribute__((section(".ippu_dmem")))
+__attribute__((aligned(64))) = { 0 };
+vspa_complex_fixed16 history_upfilter[NUM_HISTORY_SAMPLES] __attribute__((section(".ippu_dmem")))
+__attribute__((aligned(64))) = { 0 };
+// QEC buffer must hold interpolated data
+vspa_complex_fixed16 output_qec_buffer[TX_NUM_QEC_BUF * TX_INTERP_SIZE] __attribute__((section(".vcpu_dmem")))
+__attribute__((aligned(64))) = { 0x00000000, 0x00010001, 0x00020002, 0x00030003 };
+
+int filter_taps_upsampling[FILTER_TAP_UPSAMPLE * 2] __attribute__((aligned(64))) = {
+#if defined(IQMOD_2DEC2INT)
+#include "para_files\h_2x_32tap_stop10000_FR1_gain2p4.bin.txt"
+};
+#elif defined(IQMOD_4DEC4INT)
+#include "para_files\h_4x_64tap_stop10000_FR1_gain4p8.bin.txt"
+};
+#endif
+#else
 vspa_complex_fixed16 output_qec_buffer[TX_NUM_QEC_BUF * TX_DMA_TXR_size] __attribute__((section(".vcpu_dmem")))
 __attribute__((aligned(64))) = { 0x00000000, 0x00010001, 0x00020002, 0x00030003 };
+#endif
 
 uint32_t DDR_rd_start_bit_update = 0, DDR_rd_load_start_bit_update = 0;
 #define DDR_rd_QEC_enable 1
@@ -49,10 +68,27 @@ static uint32_t TX_total_ddr_enqueued_size = 0;                             /* 0
 static uint32_t TX_total_axiq_enqueued_size = 0;                            /* 3: Axiq Tx in fifo cmd   */
 static uint32_t TX_total_axiq_consumed_size = 0;                            /* 4: Axiq Tx completed */
 
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+static uint32_t TX_total_interp_completed_size = 0;
+#endif
+
 vspa_complex_fixed16 *p_tx_ddr_enqueued = &output_buffer[0];
 vspa_complex_fixed16 *p_tx_ddr_fetched = &output_buffer[0];
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+// Interpolation stage pointers
+vspa_complex_fixed16 *p_tx_interp_in = &output_buffer[0];
+vspa_complex_fixed16 *p_tx_interp_out = &interp_buffer[0];
+
+// QEC comes after interpolation (input from interp buffer)
+vspa_complex_fixed16 *p_tx_dmem_QECed_in = &interp_buffer[0];
+
+#else
+// Original path (no interpolation)
 vspa_complex_fixed16 *p_tx_dmem_QECed_in = &output_buffer[0];
+#endif
 vspa_complex_fixed16 *p_tx_dmem_QECed_out = &output_qec_buffer[0];
+// AXIQ transmits from QEC output buffer
 vspa_complex_fixed16 *p_tx_axiq_enqueued = &output_qec_buffer[0];
 vspa_complex_fixed16 *p_tx_axiq_consumed = &output_qec_buffer[0];
 
@@ -108,7 +144,20 @@ static uint32_t dma_chan_mask(uint32_t dma_channel, uint32_t nb_dma) {
     }
     return mask;
 }
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+void tx_qec_correction(vspa_complex_fixed16 *dataIn, vspa_complex_fixed16 *dataOut, uint32_t num_samples) {
+    if (!DDR_rd_QEC_enable)
+        return;
 
+#ifdef TXIQCOMP2
+    txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_tx, num_samples / 32);
+#else
+#ifdef TXIQCOMP
+    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &txiqcompcfg_struct, num_samples / 32);
+#endif
+#endif
+}
+#else
 void tx_qec_correction(vspa_complex_fixed16 *dataIn, vspa_complex_fixed16 *dataOut) {
     if (!DDR_rd_QEC_enable)
         return;
@@ -121,6 +170,7 @@ void tx_qec_correction(vspa_complex_fixed16 *dataIn, vspa_complex_fixed16 *dataO
 #endif
 #endif
 }
+#endif
 
 uint32_t rd_dmem_dst_byte_ptr;
 
@@ -167,12 +217,33 @@ void TX_IQ_DATA_FROM_DDR(void) {
         TX_total_ddr_enqueued_size = 0;
         TX_total_ddr_fetched_size = 0;
         TX_total_dmem_QECced_size = 0;
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        TX_total_interp_completed_size = 0;
+#endif
+
         TX_total_axiq_enqueued_size = 0;
         TX_total_axiq_consumed_size = 0;
 
         p_tx_ddr_enqueued = &output_buffer[0];
         p_tx_ddr_fetched = &output_buffer[0];
+
+        // Clear buffers at start
+        memset(output_buffer, 0, sizeof(output_buffer));
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        memset(interp_buffer, 0, sizeof(interp_buffer));
+        memset(history_upfilter, 0, sizeof(history_upfilter));
+#endif
+        memset(output_qec_buffer, 0, sizeof(output_qec_buffer));
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        p_tx_interp_in = &output_buffer[0];
+        p_tx_interp_out = &interp_buffer[0];
+
+        p_tx_dmem_QECed_in = &interp_buffer[0];
+#else
         p_tx_dmem_QECed_in = &output_buffer[0];
+#endif
         p_tx_dmem_QECed_out = &output_qec_buffer[0];
         p_tx_axiq_enqueued = &output_qec_buffer[0];
         p_tx_axiq_consumed = &output_qec_buffer[0];
@@ -258,8 +329,12 @@ void TX_IQ_DATA_FROM_DDR(void) {
         host_mbox0_post(MAKEDWORD(mailbox_out_msg_0_MSB, mailbox_out_msg_0_LSB));
 
         DDR_rd_base_address = 0xdeadbeef;
-        TX_total_ddr_fetched_size = 0;
-        TX_total_dmem_QECced_size = 0;
+        // TX_total_ddr_fetched_size = 0;
+        // TX_total_dmem_QECced_size = 0;
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        TX_total_interp_completed_size = 0;
+#endif
 
         DDR_rd_start_bit_update = 0;
         DDR_rd_load_start_bit_update = 0;
@@ -384,7 +459,11 @@ void PUSH_TX_DATA(void) {
             if ((TX_total_ddr_ready_size - TX_total_ddr_enqueued_size >= TX_DDR_STEP) || host_flow_control_disable) {
                 // start new transfer from DDR if possible
                 if (dmac_is_available(ddr_rd_dma_ch_mask) == ddr_rd_dma_ch_mask) {
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+                    tx_busy_size = TX_total_ddr_enqueued_size - TX_total_interp_completed_size;
+#else
                     tx_busy_size = TX_total_ddr_enqueued_size - TX_total_dmem_QECced_size;
+#endif
                     tx_empty_size = (TX_NUM_BUF * TX_DDR_STEP) - tx_busy_size;
                     if (tx_empty_size >= TX_DDR_STEP) {
                         // start new transfer from ddr ( using 4 DMA to take advantage of possible 4 outstanding Read on AXIQ bus )
@@ -403,6 +482,78 @@ void PUSH_TX_DATA(void) {
                 }
             }
         }
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        // ============================================================
+        // STAGE 1: Interpolation (DDR output → Interpolated output)
+        // ============================================================
+        if ((TX_total_ddr_fetched_size - TX_total_interp_completed_size) >= TX_DDR_STEP) {
+            // Check if there's room in interpolation output buffer
+            tx_busy_size = (TX_total_interp_completed_size - TX_total_dmem_QECced_size) * TX_UPSMP; // Account for upsampling
+            tx_empty_size = (TX_NUM_INTERP_BUF * TX_INTERP_SIZE * 4) - tx_busy_size;
+
+            if (tx_empty_size >= (TX_INTERP_SIZE * 4)) {
+                l1_trace(L1_TRACE_L1APP_TX_INTERP_START, (uint32_t)p_tx_interp_in);
+#if defined(IQMOD_2DEC2INT)
+                // Perform 2x interpolation: 512 samples → 1024 samples
+                X2_interp_tap32_filter((__fx16 *)p_tx_interp_out, (__fx16 *)p_tx_interp_in, TX_DMA_TXR_size,
+                                       (__fx16 *)history_upfilter, (float *)filter_taps_upsampling);
+#elif defined(IQMOD_4DEC4INT)
+                // Perform 4x interpolation: 512 samples → 2048 samples
+                X4_interp_tap64_filter((__fx16 *)p_tx_interp_out, (__fx16 *)p_tx_interp_in, TX_DMA_TXR_size,
+                                       (__fx16 *)history_upfilter, (float *)filter_taps_upsampling);
+#endif
+
+                INCR_TX_BUFF(p_tx_interp_in);
+                INCR_TX_INTERP_BUFF(p_tx_interp_out);
+                TX_total_interp_completed_size += TX_DDR_STEP;
+
+                l1_trace(L1_TRACE_L1APP_TX_INTERP_COMP, TX_total_interp_completed_size);
+                tx_proxy_updated = 1;
+            }
+        }
+
+        // ============================================================
+        // STAGE 2: QEC (Interpolated output → QEC output)
+        // ============================================================
+        if ((TX_total_interp_completed_size - TX_total_dmem_QECced_size) >= TX_DDR_STEP) {
+            // QEC buffer accounting for upsampling
+            tx_busy_size = (TX_total_dmem_QECced_size - TX_total_axiq_consumed_size) * TX_UPSMP; // Account for upsampling
+            tx_empty_size = (TX_NUM_QEC_BUF * TX_INTERP_SIZE * 4) - tx_busy_size;
+
+            if (tx_empty_size >= (TX_INTERP_SIZE * 4)) {
+                l1_trace(L1_TRACE_L1APP_TX_QEC_START, (uint32_t)p_tx_dmem_QECed_in);
+
+                // Apply QEC to 1024 interpolated samples
+                tx_qec_correction(p_tx_dmem_QECed_in, p_tx_dmem_QECed_out, TX_INTERP_SIZE);
+
+                INCR_TX_INTERP_BUFF(p_tx_dmem_QECed_in);
+                INCR_TX_QEC_BUFF(p_tx_dmem_QECed_out);
+                TX_total_dmem_QECced_size += TX_DDR_STEP;
+
+                l1_trace(L1_TRACE_L1APP_TX_QEC_COMP, (uint32_t)TX_total_dmem_QECced_size);
+                tx_proxy_updated = 1;
+            }
+        }
+
+        // ============================================================
+        // STAGE 3: Transmit to AXIQ DAC
+        // ============================================================
+        if (dmac_is_available(0x1 << DMA_CHANNEL_WR)) {
+            if ((TX_total_dmem_QECced_size - TX_total_axiq_enqueued_size) >= TX_DDR_STEP) {
+                // Transmit 1024 samples = 4096 bytes
+                stream_write_custom_size(DMA_CHANNEL_WR, axi_wr, 2 * (uint32_t)(p_tx_axiq_enqueued),
+                                         TX_INTERP_SIZE << 2); // 1024 samples * 4 bytes = 4096 bytes
+                l1_trace(L1_TRACE_MSG_DMA_AXIQ_TX_START, (uint32_t)p_tx_axiq_enqueued);
+                INCR_TX_QEC_BUFF(p_tx_axiq_enqueued);
+                TX_total_axiq_enqueued_size += TX_DDR_STEP;
+            }
+        }
+
+#else
+        // ============================================================
+        // Original path (no interpolation): DDR → QEC → AXIQ
+        // ============================================================
 
         // QEC data before transmission
         if ((TX_total_ddr_fetched_size - TX_total_dmem_QECced_size) >= TX_DDR_STEP) {
@@ -434,6 +585,7 @@ void PUSH_TX_DATA(void) {
                 // l1_trace_disable = 1;
             }
         }
+#endif // IQMOD_2DEC2INT || IQMOD_4DEC4INT
     }
 
 end_tx_push:

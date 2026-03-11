@@ -20,7 +20,7 @@
  *   txiqcomp_x32chf_5t  IQ phase and amplitude + IQ fractional delay compensation
  */
 // #define TXIQCOMP2
-// #define RXIQCOMP2
+// #define RXIQCOMP
 #define TXIQCOMP
 #define RXIQCOMP
 
@@ -43,5 +43,7 @@ void stream_write_ptr_rst(uint32_t dma_channel_wr, uint32_t axi_wr);
 void stream_read_ptr_rst(uint32_t dma_channel_rd, uint32_t axi_rd);
 void stream_write(uint32_t dma_channel_wr, uint32_t axi_wr, uint32_t vsp);
 void stream_read(uint32_t dma_channel_rd, uint32_t axi_rd, uint32_t vsp);
-
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+void stream_write_custom_size(uint32_t dma_channel_wr, uint32_t axi_wr, uint32_t vsp, uint32_t size_bytes);
+#endif
 #endif /* DFE_H_ */

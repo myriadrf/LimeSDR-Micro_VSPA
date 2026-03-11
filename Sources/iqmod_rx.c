@@ -24,14 +24,30 @@
 #include "stats.h"
 #include "vspa_dmem_proxy.h"
 
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+// Use IPPU DMEM for input buffer and decimation
+vspa_complex_fixed16 input_buffer[RX_NUM_BUF * RX_DMA_TXR_size] __attribute__((section(".ippu_dmem")))
+__attribute__((aligned(64))) = { 0x00000000, 0x00010001, 0x00020002, 0x00030003 };
+// Decimated output in VCPU DMEM
+vspa_complex_fixed16 input_dec_buffer[RX_NUM_DEC_BUF * (RX_DMA_TXR_size / RX_DECIM)] __attribute__((section(".vcpu_dmem")))
+__attribute__((aligned(64)));
+
+// Decimation filter state
+cfixed16_t filtState[32] __attribute__((section(".ippu_dmem"))) __attribute__((aligned(64)));
+
+// Filter coefficients
+int filter_taps_downsampling[8] __attribute__((aligned(64))) = {
+#include "para_files\2xdown_coeff.txt"
+};
+#else
+// Original buffer allocation for non-decimating configs
 vspa_complex_fixed16 input_buffer[RX_NUM_BUF * RX_DMA_TXR_size] __attribute__((section(".vcpu_dmem")))
 __attribute__((aligned(64))) = { 0x00000000, 0x00010001, 0x00020002, 0x00030003 };
 vspa_complex_fixed16 input_qec_buffer[RX_NUM_QEC_BUF * RX_DMA_TXR_size] __attribute__((section(".ippu_dmem")))
 __attribute__((aligned(64))) = { 0x00000000, 0x00010001, 0x00020002, 0x00030003 };
+#endif
 
-// uint32_t DDR_wr_QEC_enable= 0, DDR_wr_CMP_enable=0;
 #define DDR_wr_QEC_enable 1
-#define DDR_wr_CMP_enable 0
 uint32_t DDR_wr_start_bit_update = 0, DDR_wr_load_start_bit_update = 0, DDR_wr_continuous = 0;
 uint32_t ddr_wr_dma_xfr_size = RX_DDR_STEP;
 uint32_t DDR_wr_buff_wrap_equeued = 0;
@@ -42,21 +58,35 @@ volatile uint32_t RX_ext_dma_enabled = 0;
 uint32_t ddr_wr_dma_ch_nb = 0;
 uint32_t ddr_wr_dma_ch_mask = 0;
 
-static uint32_t RX_total_axiq_enqueued_size = 0;                                 /* 0: Axiq rx in fifo cmd	*/
-static uint32_t RX_total_axiq_received_size = 0;                                 /* 1: Axiq rx dma completed	*/
-volatile uint32_t RX_total_dmem_QECed_size = 0;                                  /* 2: Rx data QECed			*/
-#define RX_total_dmem_CMPed_size (rx_vspa_proxy[0].la9310_fifo_produced_size)    /* 4: compressed            */
+static uint32_t RX_total_axiq_enqueued_size = 0;                                 /* 0: Axiq rx in fifo cmd     */
+static uint32_t RX_total_axiq_received_size = 0;                                 /* 1: Axiq rx dma completed   */
+volatile uint32_t RX_total_dmem_QECed_size = 0;                                  /* 2: Rx data QECed                   */
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+static uint32_t RX_total_dmem_input_Decimated_size = 0;                                  /* 3: Input to decimation      */
+#define RX_total_dmem_output_Decimated_size (rx_vspa_proxy[0].la9310_fifo_produced_size) /* 4: Output from decimation */
+#endif
+
 static uint32_t RX_total_ddr_enqueued_size = 0;                                  /* 5: DDR wr cmd fifo 		*/
 #define RX_total_dmem_consumed_size (rx_vspa_proxy[0].la9310_fifo_consumed_size) /* 6: xfer to DDR complete 	*/
 #define RX_total_ddr_consumed_size (tx_vspa_proxy.host_consumed_size[0])         /* 7: DDR data ready */
 
 static vspa_complex_fixed16 *p_rx_axiq_enqueued = &input_buffer[0];
-static vspa_complex_fixed16 *p_rx_axiq_received = &input_buffer[0];
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+// For decimating configs: in-place QEC, separate decimation buffers
+static vspa_complex_fixed16 *p_rx_dmem_QECed = &input_buffer[0];
+static vspa_complex_fixed16 *p_rx_dmem_input_decimated = &input_buffer[0];
+static vspa_complex_fixed16 *p_rx_dmem_output_decimated = &input_dec_buffer[0];
+static vspa_complex_fixed16 *p_rx_ddr_enqueued = &input_dec_buffer[0];
+static vspa_complex_fixed16 *p_rx_consumed = &input_dec_buffer[0];
+#else
+// For non-decimating configs: separate QEC buffer
 static vspa_complex_fixed16 *p_rx_dmem_QECed_in = &input_buffer[0];
 static vspa_complex_fixed16 *p_rx_dmem_QECed_out = &input_qec_buffer[0];
-static vspa_complex_fixed16 *p_rx_dmem_CMPed = &input_qec_buffer[0];
 static vspa_complex_fixed16 *p_rx_ddr_enqueued = &input_qec_buffer[0];
 static vspa_complex_fixed16 *p_rx_consumed = &input_qec_buffer[0];
+#endif
 
 // uint32_t DDR_wr_base_address = 0xdeadbeef;
 uint32_t DDR_wr_offset = 0;
@@ -91,15 +121,6 @@ void DDR_write_multi_dma(uint32_t DDR_wr_dma_channel, uint32_t nb_dma, uint32_t 
     }
 }
 
-volatile cmp_cycle = 0;
-#define CMP_CYCLES (24 + 2 * 512 / 32)
-void rx_compress(vspa_complex_fixed16 *data) {
-    if (!DDR_wr_CMP_enable)
-        return;
-    // compression place holder
-    for (cmp_cycle = 0; cmp_cycle < CMP_CYCLES; cmp_cycle++) {
-    };
-}
 void rx_qec_correction(vspa_complex_fixed16 *dataIn, vspa_complex_fixed16 *dataOut) {
     if (!DDR_wr_QEC_enable)
         return;
@@ -123,7 +144,6 @@ void RX_IQ_DATA_TO_DDR(void) {
         DDR_wr_load_start_bit_update = (HIWORD(msg64)) & 0x00200000;
         DDR_wr_continuous = (HIWORD(msg64)) & 0x00800000;
         // DDR_wr_QEC_enable= 				(HIWORD(msg64)) & 0x00400000;
-        // DDR_wr_CMP_enable=  			(HIWORD(msg64)) & 0x00080000;
         ddr_wr_dma_ch_nb = ((HIWORD(msg64)) & 0x00070000) >> 16;
         host_flow_control_disable = (HIWORD(msg64)) & 0x00400000;
 
@@ -137,22 +157,32 @@ void RX_IQ_DATA_TO_DDR(void) {
             ddr_wr_dma_ch_nb = 1;
         }
         ddr_wr_dma_ch_mask = dma_chan_mask(DDR_WR_DMA_CHANNEL_1, ddr_wr_dma_ch_nb);
-        ddr_wr_dma_xfr_size = (DDR_wr_CMP_enable ? RX_DDR_STEP * RX_COMPRESS_RATIO_PCT / 100 : RX_DDR_STEP);
+        ddr_wr_dma_xfr_size = RX_DDR_STEP;
 
         dmac_reset(0x1 << dma_channel_rd);
 
         p_rx_axiq_enqueued = &input_buffer[0];
-        p_rx_axiq_received = &input_buffer[0];
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        p_rx_dmem_QECed = &input_buffer[0];
+        p_rx_dmem_input_decimated = &input_buffer[0];
+        p_rx_dmem_output_decimated = &input_dec_buffer[0];
+        p_rx_ddr_enqueued = &input_dec_buffer[0];
+        p_rx_consumed = &input_dec_buffer[0];
+        RX_total_dmem_input_Decimated_size = 0;
+        RX_total_dmem_output_Decimated_size = 0;
+        // Clear decimation filter state
+        memclr((void *)filtState, sizeof(filtState));
+#else
         p_rx_dmem_QECed_in = &input_buffer[0];
         p_rx_dmem_QECed_out = &input_qec_buffer[0];
-        p_rx_dmem_CMPed = &input_qec_buffer[0];
         p_rx_ddr_enqueued = &input_qec_buffer[0];
         p_rx_consumed = &input_qec_buffer[0];
+#endif
 
         RX_total_axiq_enqueued_size = 0;
         RX_total_axiq_received_size = 0;
         RX_total_dmem_QECed_size = 0;
-        RX_total_dmem_CMPed_size = 0;
         RX_total_ddr_enqueued_size = 0;
         RX_total_dmem_consumed_size = 0;
 
@@ -220,8 +250,10 @@ void RX_IQ_DATA_TO_DDR(void) {
         }
 
         DDR_wr_base_address = 0xdeadbeef;
-        RX_total_dmem_CMPed_size = 0;
         RX_total_dmem_consumed_size = 0;
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        RX_total_dmem_output_Decimated_size = 0;
+#endif
 
         DDR_wr_start_bit_update = 0;
         DDR_wr_load_start_bit_update = 0;
@@ -278,7 +310,11 @@ void PUSH_RX_DATA(void) {
                 l1_trace(L1_TRACE_MSG_DMA_DDR_WR_COMP, (uint32_t)g_stats.rx_stats[0][STAT_DMA_DDR_WR]);
             }
             // restart DDR dma if possible
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+            p_rx_ddr_enqueued = input_dec_buffer;
+#else
             p_rx_ddr_enqueued = input_qec_buffer;
+#endif
             if (dmac_is_available(ddr_wr_dma_ch_mask) == ddr_wr_dma_ch_mask) {
                 DDR_write_multi_dma(DDR_WR_DMA_CHANNEL_1, ddr_wr_dma_ch_nb, DDR_wr_base_address + DDR_wr_offset,
                                     2 * (uint32_t)p_rx_ddr_enqueued, ddr_wr_dma_xfr_size);
@@ -316,7 +352,7 @@ void PUSH_RX_DATA(void) {
         if (dmac_is_complete(0x1 << dma_channel_rd)) {
             dmac_clear_complete(0x1 << dma_channel_rd);
             dmac_clear_event(0x1 << dma_channel_rd);
-            RX_total_axiq_received_size += RX_DDR_STEP;
+            RX_total_axiq_received_size += RX_DMA_TXR_STEP;
             g_stats.rx_stats[0][STAT_DMA_AXIQ_READ]++;
             l1_trace(L1_TRACE_MSG_DMA_AXIQ_RX_COMP, (uint32_t)g_stats.rx_stats[0][STAT_DMA_AXIQ_READ]);
             // check axiq dma error
@@ -326,7 +362,83 @@ void PUSH_RX_DATA(void) {
                 l1_trace(L1_TRACE_MSG_DMA_AXIQ_RX_XFER_ERROR, (uint32_t)g_stats.gbl_stats[ERROR_DMA_XFER_ERROR]);
             }
         }
-        // restart axiq  dma if possible
+
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+        // QEC buffer just received (in-place)
+        if ((RX_total_axiq_received_size - RX_total_dmem_QECed_size) >= RX_DMA_TXR_STEP) {
+            l1_trace(L1_TRACE_L1APP_RX_QEC_START, (uint32_t)p_rx_dmem_QECed);
+            rx_qec_correction((vspa_complex_fixed16 *)p_rx_dmem_QECed, (vspa_complex_fixed16 *)p_rx_dmem_QECed);
+            INCR_RX_BUFF(p_rx_dmem_QECed);
+            RX_total_dmem_QECed_size += RX_DMA_TXR_STEP;
+            l1_trace(L1_TRACE_L1APP_RX_QEC_COMP, (uint32_t)RX_total_dmem_QECed_size);
+        }
+
+        // Decimation
+        if ((RX_total_dmem_QECed_size - RX_total_dmem_input_Decimated_size) >= RX_DMA_TXR_STEP) {
+            rx_busy_size = RX_total_dmem_output_Decimated_size - RX_total_dmem_consumed_size;
+            rx_empty_size = (RX_NUM_DEC_BUF * RX_DDR_STEP) - rx_busy_size;
+            if (rx_empty_size >= RX_DDR_STEP) {
+                l1_trace(L1_TRACE_L1APP_RX_DEC_START, (uint32_t)p_rx_dmem_input_decimated);
+#ifdef IQMOD_2DEC2INT
+                decimator_2x_8_Taps_asm((cfixed16_t *)p_rx_dmem_output_decimated, (cfixed16_t *)p_rx_dmem_input_decimated,
+                                        (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState, RX_DMA_TXR_size);
+#endif
+#ifdef IQMOD_4DEC4INT
+                decimator_4x_8_Taps_asm((cfixed16_t *)p_rx_dmem_output_decimated, (cfixed16_t *)p_rx_dmem_input_decimated,
+                                        (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState, RX_DMA_TXR_size);
+#endif
+                INCR_RX_BUFF(p_rx_dmem_input_decimated);
+                INCR_RX_DEC_BUFF(p_rx_dmem_output_decimated);
+                RX_total_dmem_input_Decimated_size += RX_DMA_TXR_STEP;
+                RX_total_dmem_output_Decimated_size += RX_DDR_STEP;
+                rx_proxy_updated = 1;
+                l1_trace(L1_TRACE_L1APP_RX_DEC_COMP, (uint32_t)RX_total_dmem_input_Decimated_size);
+            }
+        }
+        // restart axiq dma if possible
+        if (dmac_is_available(0x1 << dma_channel_rd)) {
+            rx_busy_size = RX_total_axiq_enqueued_size - RX_total_dmem_input_Decimated_size;
+            rx_empty_size = (RX_NUM_BUF * RX_DMA_TXR_STEP) - rx_busy_size;
+            if (rx_empty_size >= RX_DMA_TXR_STEP) {
+                stream_read(dma_channel_rd, axi_rd, 2 * (uint32_t)(p_rx_axiq_enqueued));
+                INCR_RX_BUFF(p_rx_axiq_enqueued);
+                RX_total_axiq_enqueued_size += RX_DMA_TXR_STEP;
+                l1_trace(L1_TRACE_MSG_DMA_AXIQ_RX_START, (uint32_t)p_rx_axiq_enqueued);
+            } else {
+                g_stats.rx_stats[0][ERROR_DMA_DDR_WR_OVERRUN]++;
+                l1_trace(L1_TRACE_MSG_DMA_DDR_WR_OVERRUN, (uint32_t)g_stats.rx_stats[0][ERROR_DMA_DDR_WR_OVERRUN]);
+            }
+        }
+
+        // Push data to DDR if standalone mode
+        if (!RX_ext_dma_enabled) {
+            if (dmac_is_complete(ddr_wr_dma_ch_mask) == ddr_wr_dma_ch_mask) {
+                dmac_clear_complete(ddr_wr_dma_ch_mask);
+                RX_total_dmem_consumed_size += RX_DDR_STEP;
+                g_stats.rx_stats[0][STAT_DMA_DDR_WR]++;
+                l1_trace(L1_TRACE_MSG_DMA_DDR_WR_COMP, (uint32_t)g_stats.rx_stats[0][STAT_DMA_DDR_WR]);
+            }
+
+            // host flow control
+            if ((RX_total_ddr_enqueued_size - tx_vspa_proxy.host_consumed_size[0] < DDR_wr_size) || host_flow_control_disable) {
+                if ((RX_total_dmem_output_Decimated_size - RX_total_ddr_enqueued_size) >= RX_DDR_STEP) {
+                    if (dmac_is_available(ddr_wr_dma_ch_mask) == ddr_wr_dma_ch_mask) {
+                        DDR_write_multi_dma(DDR_WR_DMA_CHANNEL_1, ddr_wr_dma_ch_nb, DDR_wr_base_address + DDR_wr_offset,
+                                            2 * (uint32_t)p_rx_ddr_enqueued, ddr_wr_dma_xfr_size);
+                        INCR_RX_DEC_BUFF(p_rx_ddr_enqueued);
+                        RX_total_ddr_enqueued_size += RX_DDR_STEP;
+                        DDR_wr_offset += ddr_wr_dma_xfr_size;
+                        if (DDR_wr_offset >= DDR_wr_size) {
+                            DDR_wr_buff_wrap_equeued = 1;
+                            DDR_wr_offset = 0;
+                        }
+                        l1_trace(L1_TRACE_MSG_DMA_DDR_WR_START, (uint32_t)p_rx_ddr_enqueued);
+                    }
+                }
+            }
+        }
+#else
+        // restart axiq dma if possible
         if (dmac_is_available(0x1 << dma_channel_rd)) {
             rx_busy_size = RX_total_axiq_enqueued_size - RX_total_dmem_QECed_size;
             rx_empty_size = (RX_NUM_BUF * RX_DDR_STEP) - rx_busy_size;
@@ -355,17 +467,7 @@ void PUSH_RX_DATA(void) {
                 l1_trace(L1_TRACE_L1APP_RX_QEC_COMP, (uint32_t)RX_total_dmem_QECed_size);
             }
         }
-        if ((RX_total_dmem_QECed_size - RX_total_dmem_CMPed_size) >= RX_DDR_STEP) {
-            // Compress buffer
-            l1_trace(L1_TRACE_L1APP_RX_CMP_START, (uint32_t)p_rx_dmem_CMPed);
-            // rx_compress((vspa_complex_fixed16 *)p_rx_dmem_CMPed);
-            INCR_RX_QEC_BUFF(p_rx_dmem_CMPed);
-            RX_total_dmem_CMPed_size += RX_DDR_STEP;
-            l1_trace(L1_TRACE_L1APP_RX_CMP_COMP, (uint32_t)RX_total_dmem_QECed_size);
 
-            // update host vspa_dmem_proxy
-            rx_proxy_updated = 1;
-        }
         // Push data to DDR if standalone mode
         if (!RX_ext_dma_enabled) {
             // check DDR dma completion
@@ -382,7 +484,7 @@ void PUSH_RX_DATA(void) {
 
             // host flow control
             if ((RX_total_ddr_enqueued_size - tx_vspa_proxy.host_consumed_size[0] < DDR_wr_size) || host_flow_control_disable) {
-                if ((RX_total_dmem_CMPed_size - RX_total_ddr_enqueued_size) >= RX_DDR_STEP) {
+                if ((RX_total_dmem_QECed_size - RX_total_ddr_enqueued_size) >= RX_DDR_STEP) {
                     if (dmac_is_available(ddr_wr_dma_ch_mask) == ddr_wr_dma_ch_mask) {
                         DDR_write_multi_dma(DDR_WR_DMA_CHANNEL_1, ddr_wr_dma_ch_nb, DDR_wr_base_address + DDR_wr_offset,
                                             2 * (uint32_t)p_rx_ddr_enqueued, ddr_wr_dma_xfr_size);
@@ -398,6 +500,8 @@ void PUSH_RX_DATA(void) {
                 }
             }
         }
+#endif
+
         if ((DDR_wr_buff_loop_count) && (!DDR_wr_continuous)) {
 
             dmac_abort(0x1 << dma_channel_rd);

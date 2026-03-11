@@ -51,11 +51,21 @@
 #define RX_DECIM 2
 #endif
 
-#ifdef IQMOD_RX_4DDC
+#ifdef IQMOD_2DEC2INT
 #define RX_NUM_CHAN 1
 #define RX_NUM_BUF 3
+#define RX_NUM_QEC_BUF 3
 #define RX_COMPRESS_RATIO_PCT 100
 #define RX_NUM_DEC_BUF 3
+#define RX_DMA_TXR_size (512)
+#define RX_DECIM 2
+#endif
+
+#ifdef IQMOD_4DEC4INT
+#define RX_NUM_CHAN 1
+#define RX_NUM_BUF 2
+#define RX_COMPRESS_RATIO_PCT 100
+#define RX_NUM_DEC_BUF 2
 #define RX_DMA_TXR_size (512)
 #define RX_DECIM 4
 #endif
@@ -76,6 +86,7 @@
 
 #include "txiqcomp.h"
 
+// Single-channel non-decimating configs (1T1R, 0T1R)
 #if defined(IQMOD_RX_1T1R) || defined(IQMOD_RX_0T1R)
 
 extern vspa_complex_fixed16 input_buffer[RX_NUM_BUF * RX_DMA_TXR_size] __attribute__((section(".vcpu_dmem")))
@@ -100,10 +111,37 @@ extern vspa_complex_fixed16 *input_buffer_1;
         }                                                                        \
     }
 
-#else /*#ifdef IQMOD_RX_1T1R*/
+// Single-channel decimating configs (2DEC2INT, 4DEC4INT)
+#elif defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+
+extern vspa_complex_fixed16 input_buffer[RX_NUM_BUF * RX_DMA_TXR_size] __attribute__((section(".ippu_dmem")))
+__attribute__((aligned(64)));
+extern vspa_complex_fixed16 input_dec_buffer[RX_NUM_DEC_BUF * (RX_DMA_TXR_size / RX_DECIM)] __attribute__((section(".vcpu_dmem")))
+__attribute__((aligned(64)));
+
+#define INCR_RX_BUFF(rxbuff_ptr)                                         \
+    {                                                                    \
+        rxbuff_ptr += RX_DMA_TXR_size;                                   \
+        if (rxbuff_ptr >= &input_buffer[RX_NUM_BUF * RX_DMA_TXR_size]) { \
+            rxbuff_ptr = &input_buffer[0];                               \
+        }                                                                \
+    }
+
+#define INCR_RX_DEC_BUFF(rxbuff_ptr)                                                          \
+    {                                                                                         \
+        rxbuff_ptr += RX_DMA_TXR_size / RX_DECIM;                                             \
+        if (rxbuff_ptr >= &input_dec_buffer[RX_NUM_DEC_BUF * (RX_DMA_TXR_size / RX_DECIM)]) { \
+            rxbuff_ptr = &input_dec_buffer[0];                                                \
+        }                                                                                     \
+    }
+
+// Multi-channel configs (1T2R, 1T4R, 8DDC)
+#else
 
 extern vspa_complex_fixed16 input_buffer[RX_NUM_CHAN][RX_NUM_BUF * RX_DMA_TXR_size] __attribute__((section(".ippu_dmem")))
 __attribute__((aligned(64)));
+extern vspa_complex_fixed16 input_dec_buffer[RX_NUM_CHAN][RX_NUM_DEC_BUF * (RX_DMA_TXR_size / RX_DECIM)]
+    __attribute__((section(".vcpu_dmem"))) __attribute__((aligned(64)));
 
 #define INCR_RX_BUFF(rxbuff_ptr, chan)                                         \
     {                                                                          \
@@ -142,6 +180,7 @@ typedef struct s_rx_ch_context {
     vspa_complex_fixed16 *p_rx_consumed;
     uint32_t DDR_wr_offset;
     // uint32_t DDR_wr_base_address; /* moved to host proxy */
+
 } t_rx_ch_context;
 
 extern structTXIQCompParams rxiqcompcfg_struct _VSPA_VECTOR_ALIGN;

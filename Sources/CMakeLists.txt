@@ -72,14 +72,23 @@ target_link_options(apm-iqplayer-1T4R PUBLIC ${COMMON_LINK_OPTIONS})
 target_link_libraries(apm-iqplayer-1T4R PUBLIC vspa-kernel)
 
 # Need to check required definitions
-add_executable(apm-iqplayer-4DDC
+add_executable(apm-iqplayer-2DEC2INT
     ${COMMON_IQPLAYER_SOURCE}
-    iqmod_rx_2R_decx2x4.c
-    iqmod_tx_2R.c
+    iqmod_rx.c
+    iqmod_tx.c
 )
-target_compile_definitions(apm-iqplayer-4DDC PRIVATE IQMOD_RX_4DDC)
-target_link_options(apm-iqplayer-4DDC PUBLIC ${COMMON_LINK_OPTIONS})
-target_link_libraries(apm-iqplayer-4DDC PUBLIC vspa-kernel)
+target_compile_definitions(apm-iqplayer-2DEC2INT PRIVATE IQMOD_2DEC2INT IQMOD_RX_2DEC2INT)
+target_link_options(apm-iqplayer-2DEC2INT PUBLIC ${COMMON_LINK_OPTIONS})
+target_link_libraries(apm-iqplayer-2DEC2INT PUBLIC vspa-kernel)
+
+add_executable(apm-iqplayer-4DEC4INT
+    ${COMMON_IQPLAYER_SOURCE}
+    iqmod_rx.c
+    iqmod_tx.c
+)
+target_compile_definitions(apm-iqplayer-4DEC4INT PRIVATE IQMOD_4DEC4INT IQMOD_RX_4DEC4INT)
+target_link_options(apm-iqplayer-4DEC4INT PUBLIC ${COMMON_LINK_OPTIONS})
+target_link_libraries(apm-iqplayer-4DEC4INT PUBLIC vspa-kernel)
 
 add_executable(apm-iqplayer-8DDC
     ${COMMON_IQPLAYER_SOURCE}

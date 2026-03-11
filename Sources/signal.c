@@ -79,7 +79,11 @@ void gen_nco_single_tone(vspa_complex_fixed16 *buffer) __attribute__ ((aligned(6
     iq_comp_params2_tx.inpCircBuffBase = (vspa_complex_fixed16 *)buffer;
     iq_comp_params2_tx.inpCircBuffSize = FFT_SIZE * 2;
 #endif
+#if !defined(IQMOD_2DEC2INT) && !defined(IQMOD_4DEC4INT)
     tx_qec_correction(buffer, buffer);
+#else
+    tx_qec_correction(buffer, buffer, MEM_LINE_SIZE);
+#endif
 
     return;
 }

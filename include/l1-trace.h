@@ -19,6 +19,10 @@
 #define L1_TRACE 1
 #define L1_TRACE_SIZE 100
 #endif
+#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
+#define L1_TRACE 1
+#define L1_TRACE_SIZE 100
+#endif
 
 #define L1_TRACE_HOST_SIZE 100
 #define L1_TRACE_M7_SIZE 100
@@ -93,6 +97,8 @@ enum l1_trace_msg_l1app {
     /* 0x30b */ L1_TRACE_L1APP_RX_DEC_COMP,
     /* 0x30c */ L1_TRACE_L1APP_RX_CMP_START,
     /* 0x30d */ L1_TRACE_L1APP_RX_CMP_COMP,
+    /* 0x30e */ L1_TRACE_L1APP_TX_INTERP_START,
+    /* 0x30f */ L1_TRACE_L1APP_TX_INTERP_COMP,
 };
 
 /**

@@ -23,7 +23,6 @@
 #include "iqmod_rx.h"
 #include "main.h"
 #include "stats.h"
-#include "ddc2x4x.h"
 #include "vspa_dmem_proxy.h"
 
 vspa_complex_fixed16 input_buffer[RX_NUM_CHAN][RX_NUM_BUF * RX_DMA_TXR_size] __attribute__((section(".ippu_dmem")))
@@ -362,7 +361,12 @@ void PUSH_RX_DATA(void) {
                                             (cfixed16_t *)rx_ch_context[i].p_rx_dmem_input_decimated,
                                             (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState[i], RX_DMA_TXR_size);
 #endif
-#ifdef IQMOD_RX_4DDC
+#ifdef IQMOD_2DEC2INT
+                    decimator_2x_8_Taps_asm((cfixed16_t *)rx_ch_context[i].p_rx_dmem_output_decimated,
+                                            (cfixed16_t *)rx_ch_context[i].p_rx_dmem_input_decimated,
+                                            (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState[i], RX_DMA_TXR_size);
+#endif
+#ifdef IQMOD_4DEC4INT
                     decimator_4x_8_Taps_asm((cfixed16_t *)rx_ch_context[i].p_rx_dmem_output_decimated,
                                             (cfixed16_t *)rx_ch_context[i].p_rx_dmem_input_decimated,
                                             (float32_t *)filter_taps_downsampling, (cfixed16_t *)filtState[i], RX_DMA_TXR_size);
