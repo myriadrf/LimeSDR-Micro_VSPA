@@ -15,14 +15,11 @@
 #include "dmac.h"
 #include "phy-timer.h"
 #include "ippu.h"
-#include "ovly.h"
-#include "ovly_init.h"
 #include "main.h"
 #include "dfe.h"
 #include "iqmod_tx.h"
 #include "iqmod_rx.h"
 #include "cal_signal.h"
-#include "dc_cal.h"
 #include "ccnt.h"
 #include "l1-trace.h"
 #include "stats.h"
@@ -225,9 +222,6 @@ __attribute__((noreturn)) void main(void) {
 #define HOST_VCPU_A011455 (0x024 >> 2)
         iowr(HOST_VCPU_A011455, 0x10, 0x10);
 
-        initOverlays();
-        // redcap_load_ovly(REDCAP_OVLY_CODE_IQ_DATA);
-
         setup();
 
         RX_index = 0;
@@ -312,17 +306,17 @@ __attribute__((noreturn)) void main(void) {
                 RX_single_tone_measurement();
                 break;
 
-            case MBOX_OPC_DCOC:
-                if (DCOC_direction == 0) {
-                    RX_DCOC_CAL();
-                } else {
-                    TX_DCOC_CAL();
-                }
-                break;
+            // case MBOX_OPC_DCOC:
+            //     if (DCOC_direction == 0) {
+            //         RX_DCOC_CAL();
+            //     } else {
+            //         TX_DCOC_CAL();
+            //     }
+            //     break;
 
-            case MBOX_OPC_BW_CAL:
-                BW_CAL();
-                break;
+            // case MBOX_OPC_BW_CAL:
+            //     BW_CAL();
+            //     break;
 
             case MBOX_OPC_IQ_MOD_TX:
                 TX_IQ_DATA_FROM_DDR();

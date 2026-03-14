@@ -9,10 +9,8 @@ include_directories(${CMAKE_CURRENT_LIST_DIR})
 set(COMMON_IQPLAYER_SOURCE
     _main.c
     crt0.s
-    dc_cal.c
     dfe.c
     l1-trace.c
-    ovly_init.c
     signal.c
 )
 
