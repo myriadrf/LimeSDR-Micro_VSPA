@@ -22,7 +22,8 @@ set_source_files_properties(
     PROPERTIES LANGUAGE C
 )
 
-set(COMMON_LINK_OPTIONS -mem ${PROJECT_SOURCE_DIR}/LCF/la9310_iqplayer.lcf -nostartup-files)
+set(LA9310_LINKER_SCRIPT ${PROJECT_SOURCE_DIR}/LCF/la9310_iqplayer.lcf)
+set(COMMON_LINK_OPTIONS -mem ${LA9310_LINKER_SCRIPT} -nostartup-files)
 
 add_executable(apm-iqplayer-1T1R
     ${COMMON_IQPLAYER_SOURCE}
@@ -30,6 +31,7 @@ add_executable(apm-iqplayer-1T1R
 target_compile_definitions(apm-iqplayer-1T1R PRIVATE IQMOD_RX_1T1R)
 target_link_options(apm-iqplayer-1T1R PUBLIC ${COMMON_LINK_OPTIONS})
 target_link_libraries(apm-iqplayer-1T1R PUBLIC vspa-kernel)
+set_target_properties(apm-iqplayer-1T1R PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})
 
 add_executable(apm-iqplayer-2DEC2INT
     ${COMMON_IQPLAYER_SOURCE}
@@ -37,6 +39,7 @@ add_executable(apm-iqplayer-2DEC2INT
 target_compile_definitions(apm-iqplayer-2DEC2INT PRIVATE IQMOD_2DEC2INT IQMOD_RX_2DEC2INT)
 target_link_options(apm-iqplayer-2DEC2INT PUBLIC ${COMMON_LINK_OPTIONS})
 target_link_libraries(apm-iqplayer-2DEC2INT PUBLIC vspa-kernel)
+set_target_properties(apm-iqplayer-2DEC2INT PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})
 
 add_executable(apm-iqplayer-4DEC4INT
     ${COMMON_IQPLAYER_SOURCE}
@@ -44,3 +47,4 @@ add_executable(apm-iqplayer-4DEC4INT
 target_compile_definitions(apm-iqplayer-4DEC4INT PRIVATE IQMOD_4DEC4INT IQMOD_RX_4DEC4INT)
 target_link_options(apm-iqplayer-4DEC4INT PUBLIC ${COMMON_LINK_OPTIONS})
 target_link_libraries(apm-iqplayer-4DEC4INT PUBLIC vspa-kernel)
+set_target_properties(apm-iqplayer-4DEC4INT PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})
