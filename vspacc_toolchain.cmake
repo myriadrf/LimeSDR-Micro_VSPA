@@ -97,6 +97,9 @@ set(CMAKE_ASM_COMPILER_WORKS ON)
 
 set(CMAKE_CXX_COMPILER_WORKS OFF)
 
+# linker
+set(CMAKE_C_LINKER_WRAPPER_FLAG "-Xlnk" " ") # forward options from compiler to linker
+
 set(CMAKE_EXECUTABLE_SUFFIX_C ".eld") # produce firmware with .eld extension
 set(CMAKE_FIND_LIBRARY_SUFFIXES ".eln")
 set(CMAKE_STATIC_LIBRARY_SUFFIX_C ".elb") # fsvspacc fails to link .a files without -l flag, but can link .elb
