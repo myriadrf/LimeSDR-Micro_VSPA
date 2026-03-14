@@ -22,7 +22,7 @@ set_source_files_properties(
     PROPERTIES LANGUAGE C
 )
 
-set(COMMON_LINK_OPTIONS -mem ${PROJECT_SOURCE_DIR}/LCF/la9310_iqplayer.lcf -nostartup-files -O3 -Os)
+set(COMMON_LINK_OPTIONS -mem ${PROJECT_SOURCE_DIR}/LCF/la9310_iqplayer.lcf -nostartup-files)
 
 
 add_executable(apm-iqplayer-0T1R

@@ -14,7 +14,22 @@ IF(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 ENDIF()
 
-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -Os -nostartup-files -ansi off -g -opt=noalias_by_type -mvcpu -msgstyle gcc")
+add_compile_options(
+    -O3
+    -Os
+    -nostartup-files
+    -ansi off
+    -opt=noalias_by_type
+    -mvcpu
+    -msgstyle gcc
+    $<$<CONFIG:Debug>:-g> # generate debug info
+)
+
+add_link_options(
+    $<$<CONFIG:Release>:LINKER:-S> # Strips debug information from the executable object file.
+    $<$<CONFIG:Release>:LINKER:-xd> # Instructs the linker to remove symbols that were emitted by the compiler and assembler for debugging sections.
+    $<$<CONFIG:Release>:LINKER:-x> # Removes all local symbols from the symbol table.
+)
 
 message(STATUS "BUILD_TYPE: " ${CMAKE_BUILD_TYPE})
 
