@@ -149,30 +149,7 @@ unit private (*){
 		.itext {
 			.itext
 		} > .ipram
-		
-		//CODE overlays assignments
-		.IQ_data_ovl_ddr {
-			.=align(16);
-            .text.opcode_1
-            .text.opcode_2
-            .text.opcode_5
-            .text.opcode_6
- 			.=align(16);
-		} > .IQ_data_ovl_ddr
-		
-		.CAL_ovl_ddr {
-			.=align(16);
-            .text.opcode_3
-            .text.opcode_4
-			.=align(16);
-		} > .CAL_ovl_ddr
-		
-		OVERLAY .vpram_overlay {
-			PRELOAD (.IQ_data_ovl_ddr;)
-			.CAL_ovl_ddr;
-		} > .vpram_overlay ;
-	
-		
+
 		.stack {
 			LNK_SECTION(stack, "rw", StackSize + HeapSize, DMEM_Line_Size, "stack_and_heap");
 		}> memory_stack_and_heap;
