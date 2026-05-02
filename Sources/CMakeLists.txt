@@ -10,10 +10,14 @@ set(COMMON_IQPLAYER_SOURCE
     _main.c
     crt0.s
     dfe.c
-    l1-trace.c
-    signal.c
-    iqmod_rx.c
-    iqmod_tx.c
+    # l1-trace.c
+    tone_generator.c
+    receiver.c
+    transmitter.c
+    dma_common.c
+    fifo.c
+    memory_pool.c
+    vspa_state.c
 )
 
 # CMake does not recognize .sx as assembly, only .s or .asm
@@ -25,26 +29,12 @@ set_source_files_properties(
 set(LA9310_LINKER_SCRIPT ${PROJECT_SOURCE_DIR}/LCF/la9310_iqplayer.lcf)
 set(COMMON_LINK_OPTIONS -mem ${LA9310_LINKER_SCRIPT} -nostartup-files)
 
-add_executable(apm-iqplayer-1T1R
+add_executable(limesdr-micro-iqplayer
     ${COMMON_IQPLAYER_SOURCE}
 )
-target_compile_definitions(apm-iqplayer-1T1R PRIVATE IQMOD_RX_1T1R)
-target_link_options(apm-iqplayer-1T1R PUBLIC ${COMMON_LINK_OPTIONS})
-target_link_libraries(apm-iqplayer-1T1R PUBLIC vspa-kernel)
-set_target_properties(apm-iqplayer-1T1R PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})
-
-add_executable(apm-iqplayer-2DEC2INT
-    ${COMMON_IQPLAYER_SOURCE}
+target_compile_definitions(limesdr-micro-iqplayer PRIVATE IQMOD_RX_1T1R)
+target_link_options(limesdr-micro-iqplayer PUBLIC ${COMMON_LINK_OPTIONS}
+    LINKER:-Map,${EXECUTABLE_OUTPUT_PATH}/limesdr-micro-iqplayer.map
 )
-target_compile_definitions(apm-iqplayer-2DEC2INT PRIVATE IQMOD_2DEC2INT IQMOD_RX_2DEC2INT)
-target_link_options(apm-iqplayer-2DEC2INT PUBLIC ${COMMON_LINK_OPTIONS})
-target_link_libraries(apm-iqplayer-2DEC2INT PUBLIC vspa-kernel)
-set_target_properties(apm-iqplayer-2DEC2INT PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})
-
-add_executable(apm-iqplayer-4DEC4INT
-    ${COMMON_IQPLAYER_SOURCE}
-)
-target_compile_definitions(apm-iqplayer-4DEC4INT PRIVATE IQMOD_4DEC4INT IQMOD_RX_4DEC4INT)
-target_link_options(apm-iqplayer-4DEC4INT PUBLIC ${COMMON_LINK_OPTIONS})
-target_link_libraries(apm-iqplayer-4DEC4INT PUBLIC vspa-kernel)
-set_target_properties(apm-iqplayer-4DEC4INT PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})
+target_link_libraries(limesdr-micro-iqplayer PUBLIC vspa-kernel)
+set_target_properties(limesdr-micro-iqplayer PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})

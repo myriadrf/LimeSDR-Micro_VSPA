@@ -7,10 +7,30 @@
 #ifndef DFE_H_
 #define DFE_H_
 
+#include "vcpu.h"
+#include <stdint.h>
 #include "txiqcomp.h"
-#include "gpio.h"
-#include "chip-la9310.h"
-#include "axiq-la9310.h"
+
+typedef enum {
+    MBOX_EMPTY = 0,      // 0x0
+    MBOX_IQ_CORR_FTAP0,  // 0x1
+    MBOX_IQ_CORR_FTAP1,  // 0x2
+    MBOX_IQ_CORR_FTAP2,  // 0x3
+    MBOX_IQ_CORR_FTAP3,  // 0x4
+    MBOX_IQ_CORR_FTAP4,  // 0x5
+    MBOX_IQ_CORR_FTAP5,  // 0x6
+    MBOX_IQ_CORR_FTAP6,  // 0x7
+    MBOX_IQ_CORR_FTAP7,  // 0x8
+    MBOX_IQ_CORR_FTAP8,  // 0x9
+    MBOX_IQ_CORR_FTAP9,  // 0xA
+    MBOX_IQ_CORR_FTAP10, // 0xB
+    MBOX_IQ_CORR_FTAP11, // 0xC
+    MBOX_IQ_CORR_FTAP12, // 0xD
+    MBOX_IQ_CORR_DC_I,   // 0xE
+    MBOX_IQ_CORR_DC_Q,   // 0xF
+    MBOX_IQ_CORR_FDELAY, // 0x10
+    MBOX_IQ_CORR_MAX,    // 0x11
+} mbox_iq_corr_factor_e;
 
 /**
  *  RX and TX kernel selection for QEC
@@ -36,14 +56,10 @@ extern structTXIQCompParams2 iq_comp_params2_rx _VSPA_VECTOR_ALIGN;
 extern structTXIQCompParams rxiqcompcfg_struct _VSPA_VECTOR_ALIGN;
 #endif
 
-void rf_init(void);
 void rf_update_iq_comp_params2(structTXIQCompParams2 *params_ptr, uint32_t rst, uint32_t idx, uint32_t val);
 void rf_update_iq_comp_params(structTXIQCompParams *params_ptr, uint32_t rst, uint32_t idx, uint32_t val);
-void stream_write_ptr_rst(uint32_t dma_channel_wr, uint32_t axi_wr);
-void stream_read_ptr_rst(uint32_t dma_channel_rd, uint32_t axi_rd);
-void stream_write(uint32_t dma_channel_wr, uint32_t axi_wr, uint32_t vsp);
-void stream_read(uint32_t dma_channel_rd, uint32_t axi_rd, uint32_t vsp);
-#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
-void stream_write_custom_size(uint32_t dma_channel_wr, uint32_t axi_wr, uint32_t vsp, uint32_t size_bytes);
-#endif
+
+void rx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount);
+void tx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount);
+
 #endif /* DFE_H_ */

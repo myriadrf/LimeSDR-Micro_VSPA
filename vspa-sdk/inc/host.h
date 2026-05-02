@@ -10,6 +10,9 @@
 #ifndef __HOST_H__
 #define __HOST_H__
 
+#include "iohw.h"
+#include "vcpu.h"
+
 //! @ingroup    GROUP_VSPA_HOST
 //! @{
 

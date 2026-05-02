@@ -63,7 +63,7 @@ IPPU_DRAMSize = (16*1024);
 IPPU_TopMemAddress    		= 0x8000;
 
 HeapSize   = 0x00000;
-StackSize  = 0x00100;
+StackSize  = 0x00700;
 StackStart = VCPU_TopMemAddress - align((StackSize + HeapSize), DMEM_Line_Size);
 
 DDR_CODE_OVERLAY_Start		= 0x20000000;	// start address of the code sections for overlays
@@ -140,6 +140,7 @@ unit private (*){
 			__end = .;
 			__bss_end = .;
 			.ibss
+			__DRAM_END = .;
 		} >.vdram;
 		
 		.idata {
@@ -164,4 +165,6 @@ __stack = originof("stack_and_heap") & 0xFFFFFF;
 _stack = originof("stack_and_heap") & 0xFFFFFF;
 ___stack_size = StackSize;
 ___pram_size = ___pram_limit - ___pram_start;
+
+ASSERT(__DRAM_END < StackStart, "Stack overflow");
 

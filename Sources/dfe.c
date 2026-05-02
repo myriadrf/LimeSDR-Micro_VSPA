@@ -4,22 +4,10 @@
  * Copyright 2024 NXP
  */
 
-#include <stddef.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <vspa/intrinsics.h>
-
-#include "chip.h"
-#include "vcpu.h"
-#include "host.h"
-#include "dmac.h"
-#include "txiqcomp.h"
-#include "iqmod_rx.h"
-#include "iqmod_tx.h"
-#include "main.h"
 #include "dfe.h"
-#include "l1-trace.h"
+
+#include "txiqcomp.h"
+#include "dma_common.h"
 
 #ifdef TXIQCOMP2
 structTXIQCompParams2 iq_comp_params2_tx _VSPA_VECTOR_ALIGN;
@@ -62,7 +50,7 @@ void rf_iq_comp_params_init(void) {
     iq_comp_params2_tx.IQImb_ftaps[10] = 1.0;
     iq_comp_params2_tx.IQImb_ftaps[11] = 1.0;
     iq_comp_params2_tx.IQImb_delay = 1;
-    iq_comp_params2_tx.inpCircBuffBase = (vspa_complex_fixed16 *)output_buffer;
+    iq_comp_params2_tx.inpCircBuffBase = (cfixed16_t *)output_buffer;
     iq_comp_params2_tx.inpCircBuffSize = 3 * FFT_SIZE * 2; // sizeof(output_buffer)
 
 #endif
@@ -95,15 +83,9 @@ void rf_iq_comp_params_init(void) {
     iq_comp_params2_rx.IQImb_ftaps[10] = 1.0;
     iq_comp_params2_rx.IQImb_ftaps[11] = 1.0;
     iq_comp_params2_rx.IQImb_delay = 1;
-    iq_comp_params2_rx.inpCircBuffBase = (vspa_complex_fixed16 *)input_buffer;
+    iq_comp_params2_rx.inpCircBuffBase = (cfixed16_t *)NULL; // input_buffer;
     iq_comp_params2_rx.inpCircBuffSize = 4 * FFT_SIZE * 2; // sizeof(input_buffer)
 #endif
-}
-
-void rf_init(void) {
-
-    dmac_reset();
-    rf_iq_comp_params_init();
 }
 
 void rf_update_iq_comp_params2(structTXIQCompParams2 *params_ptr, uint32_t rst, uint32_t idx, uint32_t val) {
@@ -161,43 +143,23 @@ void rf_update_iq_comp_params(structTXIQCompParams *params_ptr, uint32_t rst, ui
     }
 }
 
-#ifndef IQMOD_RX_0T1R
-void stream_write_ptr_rst(uint32_t dma_channel_wr, uint32_t axi_wr) {
-    uint32_t ctrl = DMAC_FIFO_RESET | DMAC_WRC | dma_channel_wr;
-    uint32_t vsp = 2 * (uint32_t)(output_buffer);
-
-    dmac_enable(ctrl, TX_DMA_TXR_size << 2, axi_wr, vsp);
-}
-
-void stream_write(uint32_t dma_channel_wr, uint32_t axi_wr, uint32_t vsp) {
-    // convert from 2c out of the ADC/DAC to SM for local VSPA work
-    // uint32_t ctrl = DMAC_FIFO | DMAC_TRIG_VCPU | DMAC_WRC | dma_channel_wr;
-    uint32_t ctrl = DMAC_FIFO | DMAC_WRC | dma_channel_wr;
-    // l1_trace(L1_TRACE_MSG_DMA_AXIQ_TX,(uint32_t)(dma_channel_wr<<24) +(uint32_t)vsp);
-    dmac_enable(ctrl, TX_DMA_TXR_size << 2, axi_wr, vsp);
-}
+void rx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount) {
+    const uint32_t dmem_lines_count = 4 * samplesCount / DMEM_LINE_SIZE_BYTES;
+#ifdef RXIQCOMP2
+    txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_rx, dmem_lines_count);
+#else
+#ifdef RXIQCOMP
+    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &rxiqcompcfg_struct, dmem_lines_count);
 #endif
-
-#ifndef IQMOD_RX_1T0R
-void stream_read_ptr_rst(uint32_t dma_channel_rd, uint32_t axi_rd) {
-    uint32_t ctrl = DMAC_FIFO_RESET | DMAC_RD | DMAC_WRC | dma_channel_rd;
-    uint32_t vsp = 2 * (uint32_t)(input_buffer);
-
-    dmac_enable(ctrl, RX_DMA_TXR_size << 2, axi_rd, vsp);
-}
-
-void stream_read(uint32_t dma_channel_rd, uint32_t axi_rd, uint32_t vsp) {
-    // convert from 2c out of the ADC/DAC to SM for local VSPA work
-    // uint32_t ctrl = DMAC_RDC | DMAC_FIFO | DMAC_TRIG_VCPU | dma_channel_rd;
-    uint32_t ctrl = DMAC_RDC | DMAC_FIFO | dma_channel_rd;
-    // l1_trace(L1_TRACE_MSG_DMA_AXIQ_RX,(uint32_t)(dma_channel_rd<<24) +(uint32_t)vsp);
-    dmac_enable(ctrl, RX_DMA_TXR_size << 2, axi_rd, vsp);
-}
 #endif
-
-#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
-void stream_write_custom_size(uint32_t dma_channel_wr, uint32_t axi_wr, uint32_t vsp, uint32_t size_bytes) {
-    uint32_t ctrl = DMAC_FIFO | DMAC_WRC | dma_channel_wr;
-    dmac_enable(ctrl, size_bytes, axi_wr, vsp);
 }
+
+void tx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount) {
+    const uint32_t dmem_lines_count = 4 * samplesCount / DMEM_LINE_SIZE_BYTES;
+#ifdef TXIQCOMP2
+    txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_tx, dmem_lines_count);
 #endif
+#ifdef TXIQCOMP
+    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &txiqcompcfg_struct, dmem_lines_count);
+#endif
+}

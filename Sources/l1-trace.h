@@ -7,21 +7,12 @@
 #ifndef __L1_TRACE_H__
 #define __L1_TRACE_H__
 
-#ifdef IQMOD_RX_1T1R
-#define L1_TRACE 1
-#define L1_TRACE_SIZE 100
-#endif
-#ifdef IQMOD_RX_1T2R
-#define L1_TRACE 1
-#define L1_TRACE_SIZE 10
-#endif
-#ifdef IQMOD_RX_1T4R
-#define L1_TRACE 1
-#define L1_TRACE_SIZE 100
-#endif
-#if defined(IQMOD_2DEC2INT) || defined(IQMOD_4DEC4INT)
-#define L1_TRACE 1
-#define L1_TRACE_SIZE 100
+#define L1_TRACE 0
+
+#if L1_TRACE
+#define L1_TRACE_COUNT 128
+#else
+#define L1_TRACE_COUNT 0
 #endif
 
 #define L1_TRACE_HOST_SIZE 100
@@ -35,6 +26,7 @@ enum l1_trace_msg_type {
     L1_TRACE_MSG_IPPU = 0xB00,
     L1_TRACE_MSG_ENTRY = 0xC00,
     L1_TRACE_MSG_COMMON = 0xD00,
+    L1_TRACE_MSG_FIFO = 0xE00,
 };
 
 /**
@@ -60,6 +52,23 @@ enum l1_trace_msg_axiq {
     /* 0x110 */ L1_TRACE_MSG_DMA_DDR_WR_START,
     /* 0x111 */ L1_TRACE_MSG_DMA_DDR_WR_COMP,
     /* 0x112 */ L1_TRACE_MSG_DMA_DDR_WR_OVERRUN,
+    L1_TRACE_MSG_DMA_PTR_RST,
+    L1_TRACE_MSG_DMA_COMPLETE,
+    L1_TRACE_MSG_DMA_AVAILABLE,
+    L1_TRACE_MSG_DMA_PENDING,
+    L1_TRACE_MSG_TX_AXIQ,
+    L1_TRACE_MSG_RX_AXIQ,
+    L1_TRACE_MSG_TX_CONTROL,
+    L1_TRACE_MSG_TX_CONFIG,
+    L1_TRACE_MSG_TX_SET_BURST_SIZE,
+    L1_TRACE_MSG_RX_CONTROL,
+    L1_TRACE_MSG_RX_CONFIG,
+    L1_TRACE_MSG_RX_SET_BURST_SIZE,
+    L1_TRACE_MSG_RX_CHANNEL_SELECT,
+    L1_TRACE_MSG_RX_FIFO_SET,
+    L1_TRACE_MSG_TX_FIFO_SET,
+    L1_TRACE_MSG_TX_BURST_END,
+    L1_TRACE_MSG_TX_DMA_ALLOWED,
 };
 
 /**
@@ -172,19 +181,18 @@ typedef struct l1_trace_data_s {
 
 #pragma cplusplus on
 #if L1_TRACE
-void l1_trace(uint32_t msg, uint32_t param);
-void l1_trace(uint32_t msg);
-void l1_trace_nr(uint32_t msg);
-void l1_trace_nr(uint32_t msg, uint32_t param);
+void l1_trace_dma(uint16_t dma_mask, uint32_t msg, uint32_t param);
+void l1_trace(uint32_t msg, uint32_t param = 0);
+void l1_trace_nr(uint32_t msg, uint32_t param = 0);
 void l1_trace_clear(void);
 
 #else  // L1_TRACE
 inline void l1_trace_clear(void) {}
 
-inline void l1_trace(uint32_t msg) {}
-inline void l1_trace(uint32_t msg, uint32_t param) {}
+inline void l1_trace(uint32_t msg, uint32_t param = 0) {}
 inline void l1_trace_nr(uint32_t msg) {}
 inline void l1_trace_nr(uint32_t msg, uint32_t param) {}
+inline void l1_trace_dma(uint16_t dma_mask, uint32_t msg, uint32_t param) {}
 #endif // L1_TRACE
 
 #if defined(__DEBUG__)
@@ -200,7 +208,7 @@ inline void l1_trace_dbg(uint32_t) {}
 #endif
 
 #ifndef __M7__
-extern l1_trace_data_t l1_trace_data[] __attribute__((aligned(64)));
+// extern l1_trace_data_t l1_trace_data[L1_TRACE_COUNT] __attribute__((aligned(64)));
 #else
 extern l1_trace_data_t *l1_trace_data;
 #endif
