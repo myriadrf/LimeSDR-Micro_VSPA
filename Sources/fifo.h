@@ -7,7 +7,7 @@
 #include "memory_pool.h"
 
 struct MemoryFIFO {
-    MemoryBlock_t items[6];
+    MemoryBlock_t items[8];
     uint16_t head;
     uint16_t tail;
 };
