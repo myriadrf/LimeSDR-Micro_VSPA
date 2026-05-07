@@ -17,7 +17,7 @@
 extern void ProcessTx(void);
 
 #define RX_ADC_DMA_SAMPLE_COUNT (512)
-#define RX_ADC_BUF_COUNT 3
+#define RX_ADC_BUF_COUNT 4
 
 #define RX_DMA_TXR_STEP (4 * RX_ADC_DMA_SAMPLE_COUNT)
 
@@ -44,7 +44,7 @@ const float rx_filter_taps_downsampling[8] __attribute__((aligned(64))) = {
 #include "fir_decimation_x2_x4.txt"
 };
 
-static MemoryPool_t vcpu_pool;
+static MemoryPool_t vcpu_pool[RX_NUM_MAX_CHAN];
 
 static rx_pipeline_t *active_pipes[4];
 static uint32_t active_pipes_count = 0;
@@ -109,11 +109,11 @@ void InitializeRx(void) {
     EnqueueProxyUpdate(PROXY_UPDATE_FLOW | PROXY_UPDATE_INFO | PROXY_UPDATE_INTERNALS);
 }
 
-static void InitMem(MemoryPool_t *pool, cfixed16_t *mem_ptr) {
+static void InitMem(MemoryPool_t *pool, cfixed16_t *mem_ptr, uint32_t samples_in_block, uint32_t block_count) {
     MemoryBlock_t block;
     mempool_clear(pool);
-    for (int i = 0; i < RX_ADC_BUF_COUNT; ++i) {
-        block.addr = &mem_ptr[RX_ADC_DMA_SAMPLE_COUNT * (RX_ADC_BUF_COUNT - i - 1)];
+    for (int i = 0; i < block_count; ++i) {
+        block.addr = &mem_ptr[samples_in_block * (block_count - i - 1)];
         block.size = RX_DMA_TXR_STEP;
         mempool_push(pool, &block);
     }
@@ -240,18 +240,23 @@ lime_Result RxChannelConfigure(e_rx_channel index, uint32_t decimation) {
     cfg->oversample = decimation;
     cfg->ddr_step = RX_DMA_TXR_STEP / cfg->oversample;
 
+    ctrl->generate_tone = 0;
     ctrl->host_flow_control_disable = 0; //(HIWORD(msg64)) & 0x00400000;
     player_state.data_flow.rx[index].produced = 0;
 
-    const uint16_t dma_mask = 0x1 << pipe->adc_dma_channel;
-    // dmac_reset(dma_mask);
+    EnqueueProxyUpdate(PROXY_UPDATE_INFO | PROXY_UPDATE_FLOW | PROXY_UPDATE_INTERNALS);
+    return lime_Result_Success;
+}
 
-    InitMem(&vcpu_pool, adc_buffer);
-    pipeline_setup(pipe);
-
-    ctrl->generate_tone = 0;
-
-    RxDMAFlush(index);
+lime_Result RxPrepare() {
+    cfixed16_t *buf = adc_buffer;
+    for (uint32_t c = 0; c < active_pipes_count; ++c) {
+        rx_pipeline_t *pipe = &RX_PIPELINE[active_pipes[c]->channelIndex];
+        InitMem(&vcpu_pool[pipe->channelIndex], buf, RX_ADC_DMA_SAMPLE_COUNT, RX_ADC_BUF_COUNT / active_pipes_count);
+        buf += RX_ADC_DMA_SAMPLE_COUNT * (RX_ADC_BUF_COUNT / active_pipes_count);
+        pipeline_setup(pipe);
+        RxDMAFlush(pipe->channelIndex);
+    }
     EnqueueProxyUpdate(PROXY_UPDATE_INFO | PROXY_UPDATE_FLOW | PROXY_UPDATE_INTERNALS);
     return lime_Result_Success;
 }
@@ -349,7 +354,7 @@ static inline void adc_enqueue(rx_pipeline_t *pipe) {
         return;
 
     MemoryBlock_t chunk;
-    if (!mempool_pop(&vcpu_pool, &chunk))
+    if (!mempool_pop(&vcpu_pool[pipe->channelIndex], &chunk))
         return;
 
     const uint32_t adc_xfer_size = chunk.size;
@@ -437,7 +442,7 @@ static void ddr_completion(rx_pipeline_t *pipe) {
         player_state.data_flow.rx[pipe->channelIndex].produced = pipe->ddr.output.bytes_done;
 
         TRACE_RX(l1_trace(L1_TRACE_MSG_DMA_DDR_WR_COMP, (uint32_t)chunk.addr));
-        mempool_push(&vcpu_pool, &chunk);
+        mempool_push(&vcpu_pool[pipe->channelIndex], &chunk);
     }
     EnqueueProxyUpdate(PROXY_UPDATE_FLOW);
 }

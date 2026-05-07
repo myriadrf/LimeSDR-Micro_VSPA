@@ -5,26 +5,26 @@
 #define IQPLAYER_COMMANDS_H
 
 typedef enum {
-    MBOX_OPC_EMPTY_0,         // 0x0
-    MBOX_OPC_SINGLE_TONE_TX,  // 0x1
-    MBOX_OPC_SINGLE_TONE_RX,  // 0x2
-    MBOX_OPC_DCOC,            // 0x3
-    MBOX_OPC_BW_CAL,          // 0x4
-    MBOX_OPC_IQ_MOD_TX,       // 0x5
-    MBOX_OPC_IQ_MOD_RX,       // 0x6
-    MBOX_OPC_MSI,             // 0x7
-    MBOX_OPC_IQ_CORR,         // 0x8
-    MBOX_OPC_EMPTY_1,         // 0x9
-    MBOX_OPC_EMPTY_2,         // 0xA
-    MBOX_OPC_TX_DCO_CORR,     // 0xB
-    MBOX_OPC_OVERLAY_BASE,    // 0xC
-    MBOX_OPC_RX_CHAN_SELECT,  // 0xD
-    MBOX_OPC_RX_DCO_CORR,     // 0xE
+    MBOX_OPC_EMPTY_0, // 0x0
+    MBOX_OPC_SINGLE_TONE_TX, // 0x1
+    MBOX_OPC_SINGLE_TONE_RX, // 0x2
+    MBOX_OPC_DCOC, // 0x3
+    MBOX_OPC_BW_CAL, // 0x4
+    MBOX_OPC_IQ_MOD_TX, // 0x5
+    MBOX_OPC_IQ_MOD_RX, // 0x6
+    MBOX_OPC_MSI, // 0x7
+    MBOX_OPC_IQ_CORR, // 0x8
+    MBOX_OPC_EMPTY_1, // 0x9
+    MBOX_OPC_EMPTY_2, // 0xA
+    MBOX_OPC_TX_DCO_CORR, // 0xB
+    MBOX_OPC_OVERLAY_BASE, // 0xC
+    MBOX_OPC_RX_CHAN_SELECT, // 0xD
+    MBOX_OPC_RX_DCO_CORR, // 0xE
     MBOX_OPC_GET_STATS_COUNT, // 0xF
-    MBOX_OPC_DONE_SWRESET,    // 0x10
-    MBOX_OPC_PROXY_OFFSET,    // 0x11
+    MBOX_OPC_DONE_SWRESET, // 0x10
+    MBOX_OPC_PROXY_OFFSET, // 0x11
 
-    MBOX_OPC_TX_AXIQ,    // 0x12
+    MBOX_OPC_TX_AXIQ, // 0x12
     MBOX_OPC_TX_PTR_RST, // 0x13
 
     MBOX_OPC_TX_HOST_FIFO_CONFIG,
@@ -36,6 +36,7 @@ typedef enum {
     MBOX_OPC_RX_CONFIGURE,
     MBOX_OPC_RX_CONTROL,
     MBOX_OPC_RX_BURST_LENGTH,
+    MBOX_OPC_RX_PREPARE,
 
 } mbox_opc_e;
 

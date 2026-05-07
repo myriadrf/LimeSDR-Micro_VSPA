@@ -39,6 +39,7 @@ void RxChannelSelect(uint32_t index);
 
 void RxHostFIFO(e_rx_channel index, uint32_t addr, uint32_t size);
 lime_Result RxChannelConfigure(e_rx_channel index, uint32_t decimation);
+lime_Result RxPrepare();
 lime_Result RxDDR_control(e_rx_channel index, uint64_t msg64);
 void ProcessRx(void);
 

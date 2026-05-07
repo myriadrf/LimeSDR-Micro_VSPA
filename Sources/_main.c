@@ -163,6 +163,10 @@ static void HandleCommand(uint64_t msg64) {
         break;
     }
 
+    case MBOX_OPC_RX_PREPARE: {
+        HostMBox0Post(MAKEDWORD(op_code, RxPrepare()));
+    }
+
     default:
         // not a valid command, NACK
         HostMBox0Post(MAKEDWORD(0x0, 0x0));
