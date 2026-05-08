@@ -433,6 +433,7 @@ static void ddr_completion(rx_pipeline_t *pipe) {
     if (!xfers_done)
         return;
 
+    uint32_t flags = PROXY_UPDATE_FLOW;
     for (uint32_t i = 0; i < xfers_done; ++i) {
         MemoryBlock_t chunk;
         if (!fifo_pop(pipe->ddr.output.fifo, &chunk))
@@ -443,8 +444,10 @@ static void ddr_completion(rx_pipeline_t *pipe) {
 
         TRACE_RX(l1_trace(L1_TRACE_MSG_DMA_DDR_WR_COMP, (uint32_t)chunk.addr));
         mempool_push(&vcpu_pool[pipe->channelIndex], &chunk);
+        if ((pipe->ddr.output.bytes_done & (0xFFFFu)) == 0)
+            flags |= PROXY_UPDATE_INTERRUPT; // interupt every 64KB
     }
-    EnqueueProxyUpdate(PROXY_UPDATE_FLOW);
+    EnqueueProxyUpdate(flags);
 }
 
 static void ddr_enqueue(rx_pipeline_t *pipe) {
