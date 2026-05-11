@@ -40,7 +40,7 @@ static cfixed16_t dac_buffer[TX_DAC_BUF_COUNT * TX_DAC_DMA_SAMPLE_COUNT] __attri
 static cfixed16_t tx_ddr_buffer[TX_INTERP_BUF_COUNT * TX_DAC_DMA_SAMPLE_COUNT / 2]
     __attribute__((aligned(64), section(".vcpu_dmem")));
 
-// separate pools for different sized blocks
+// separate pools for different sized blocks, in case of interpolation
 static MemoryPool_t ddr_pool;
 static MemoryPool_t dac_pool;
 
@@ -104,8 +104,8 @@ void InitializeTx(void) {
     TX_CONTROL.ddr_enabled = 0;
     TX_CONTROL.generate_tone = 0;
     TX_CONTROL.host_flow_control_disable = 0;
-    TX_CONTROL.burst_start_bytes = 0;
-    TX_CONTROL.burst_end_bytes = 0xFFFFFFFF;
+    TX_CONTROL.burst_fifo_offset = 0;
+    TX_CONTROL.host_burst_size = 0;
     TX_CONTROL.burst_active = 0;
 
     TX_CONTROL.ddr_rd_dma_ch_nb = 0;
@@ -113,9 +113,9 @@ void InitializeTx(void) {
     TX_CONTROL.ddr_rd_dma_mBurst = 0;
 
     TX_CONFIG.oversample = 1;
-    TX_CONFIG.ddr_base_address = 0xdeadbeef;
-    TX_CONFIG.ddr_size = 0;
-    TX_CONFIG.ddr_step = TX_DMA_TXR_STEP / TX_CONFIG.oversample;
+    TX_CONFIG.host_fifo_address = 0xdeadbeef;
+    TX_CONFIG.host_fifo_size = 0;
+    TX_CONFIG.host_fifo_step = TX_DMA_TXR_STEP / TX_CONFIG.oversample;
 
     memclr(&player_state.data_flow.tx_issues, sizeof(player_state.data_flow.tx_issues));
     player_state.data_flow.tx.consumed = 0;
@@ -180,7 +180,7 @@ static void interpolate(tx_pipeline_t *pipe) {
         break;
     }
 
-    pipe->interp.input.bytes_done += TX_CONFIG.ddr_step;
+    pipe->interp.input.bytes_done += TX_CONFIG.host_fifo_step;
     pipe->interp.output.bytes_done += TX_DMA_TXR_STEP;
 
     // l1_trace(L1_TRACE_L1APP_TX_INTERP_COMP, (uint32_t)in);
@@ -204,7 +204,7 @@ static void InitDDR_pool(MemoryPool_t *pool, cfixed16_t *mem_ptr) {
     for (uint32_t i = 0; i < TX_INTERP_BUF_COUNT; ++i) {
         MemoryBlock_t block;
         block.addr = &mem_ptr[TX_DAC_DMA_SAMPLE_COUNT / TX_CONFIG.oversample * (TX_INTERP_BUF_COUNT - i - 1)];
-        block.size = TX_CONFIG.ddr_step;
+        block.size = TX_CONFIG.host_fifo_step;
         mempool_push(pool, &block);
     }
 }
@@ -223,10 +223,10 @@ static void pipeline_reset(tx_pipeline_t *pipe) {
     stage_setup(&pipe->ddr, &ddr_enq_fifo, &ddr_ready_fifo);
     last_stage_fifo = &ddr_ready_fifo;
 
+    memclr(tx_interpolation_history, sizeof(tx_interpolation_history));
+    fifo_reset(&interp_out_fifo);
+    stage_setup(&pipe->interp, last_stage_fifo, &interp_out_fifo);
     if (TX_CONFIG.oversample > 1) {
-        // memclr(tx_interpolation_history, sizeof(tx_interpolation_history));
-        fifo_reset(&interp_out_fifo);
-        stage_setup(&pipe->interp, last_stage_fifo, &interp_out_fifo);
         last_stage_fifo = &interp_out_fifo;
     }
 
@@ -255,10 +255,10 @@ static void DDR_read_multi_dma(uint32_t DDR_rd_dma_channel, uint32_t nb_dma, uin
     }
 }
 
-void TxHostFIFO(uint32_t addr, uint32_t size) {
-    l1_trace(L1_TRACE_MSG_TX_FIFO_SET, addr);
-    TX_CONFIG.ddr_base_address = addr;
-    TX_CONFIG.ddr_size = size;
+void TxConfigureHostFIFO(uint32_t la9310_addr, uint32_t size) {
+    l1_trace(L1_TRACE_MSG_TX_FIFO_SET, la9310_addr);
+    TX_CONFIG.host_fifo_address = la9310_addr;
+    TX_CONFIG.host_fifo_size = size;
 }
 
 lime_Result TxConfigure(uint32_t oversample) {
@@ -266,15 +266,14 @@ lime_Result TxConfigure(uint32_t oversample) {
     if (TX_CONTROL.ddr_enabled || TX_CONTROL.generate_tone)
         return lime_Result_Busy;
 
-    TX_CONTROL.ddr_rd_dma_ch_nb = 1;  //((HIWORD(msg64)) & 0x00070000) >> 16;
-    TX_CONTROL.ddr_rd_dma_mBurst = 1; //((HIWORD(msg64)) & 0x00080000 ? 1 : 0);
-    // TX_CONFIG.host_flow_control_disable = (HIWORD(msg64)) & 0x00400000;
-    if (TX_CONTROL.ddr_rd_dma_ch_nb > 4)
-        TX_CONTROL.ddr_rd_dma_ch_nb = 4;
+    TX_CONTROL.ddr_rd_dma_ch_nb = 1;
+
+    // Burst=1, can get Tx DDR DMA stuck in running state and never complete, requiring power cycle to recover
+    TX_CONTROL.ddr_rd_dma_mBurst = 0;
     TX_CONTROL.ddr_rd_dma_ch_mask = dma_chan_mask(DDR_RD_DMA_CHANNEL_1, TX_CONTROL.ddr_rd_dma_ch_nb);
 
-    TX_CONTROL.burst_start_bytes = 0;
-    TX_CONTROL.burst_end_bytes = 0xFFFFFFFF;
+    TX_CONTROL.burst_fifo_offset = 0;
+    TX_CONTROL.host_burst_size = 0;
     TX_CONTROL.burst_active = 0;
 
     // if (!TX_CONFIG.ddr_rd_dma_ch_nb) {
@@ -293,7 +292,7 @@ lime_Result TxConfigure(uint32_t oversample) {
     // }
 
     TX_CONFIG.oversample = oversample;
-    TX_CONFIG.ddr_step = TX_DMA_TXR_STEP / TX_CONFIG.oversample;
+    TX_CONFIG.host_fifo_step = TX_DMA_TXR_STEP / TX_CONFIG.oversample;
 
     player_state.data_flow.tx.consumed = 0;
 
@@ -310,53 +309,39 @@ lime_Result TxConfigure(uint32_t oversample) {
 
 lime_Result TxDDR_control(uint64_t msg64) {
     const bool ddr_enable = (HIWORD(msg64)) & (1 << 0);
-    const bool reset_pipeline = (HIWORD(msg64)) & (1 << 1);
-    const uint32_t burst_length = LOWORD(msg64);
 
     l1_trace(L1_TRACE_MSG_TX_CONTROL, HIWORD(msg64));
-    if (reset_pipeline) {
-        if (TX_CONTROL.ddr_enabled)
-            return lime_Result_Busy; // cannot reset while running
-        TxConfigure(TX_CONFIG.oversample);
-    }
-
-    if (TX_CONTROL.ddr_enabled == ddr_enable) {
-        return lime_Result_Success;
-    }
-
     const uint32_t mask = TX_CONTROL.ddr_rd_dma_ch_mask | TX_DAC_DMA_MASK;
-    if (ddr_enable) {
-        TX_CONTROL.ddr_enabled = true;
-        TX_CONTROL.burst_start_bytes = txpipe.dac.input.bytes_done;
-        TX_CONTROL.burst_active = 1;
-        if (burst_length > 0)
-            TxSetBurstSize(burst_length);
-        else
-            TX_CONTROL.burst_end_bytes = 0xFFFFFFFF; // will be set by another command
+    if (TX_CONTROL.ddr_enabled != ddr_enable) {
+        if (ddr_enable) {
+            pipeline_reset(&txpipe);
+            TX_CONTROL.ddr_enabled = true;
+            TX_CONTROL.burst_fifo_offset = LOWORD(msg64);
+            TX_CONTROL.burst_active = 1;
+            TxSetBurstSize(0);
 
-        TxAXIQ(true);
-        // axiq_fifo_tx_clrerr(AXIQ_BANK_0, AXIQ_FIFO_TX0);
-        axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-        axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, 0);
+            TxAXIQ(true);
+            // axiq_fifo_tx_clrerr(AXIQ_BANK_0, AXIQ_FIFO_TX0);
+            axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
+            axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, 0);
 
-        dmac_clear_complete(mask);
-        dmac_clear_event(mask);
-        EnqueueProxyUpdate(PROXY_UPDATE_FLOW);
-    } else {
-        if (burst_length > 0)
-            TxSetBurstSize(burst_length); // stops after transmission is done
-        else {
-            TxAXIQ(false);
-            TX_CONTROL.ddr_enabled = false; // stop immediately
-            dac_finish(&txpipe);            // wait for currently enqued transfers to complete
-            TX_CONTROL.burst_end_bytes = 0xFFFFFFFF;
-            if (TX_CONTROL.burst_active)
+            dmac_clear_complete(mask);
+            dmac_clear_event(mask);
+            EnqueueProxyUpdate(PROXY_UPDATE_FLOW);
+        } else {
+            const uint32_t burst_length = LOWORD(msg64);
+            if (burst_length > 0)
+                TxSetBurstSize(burst_length); // stops Tx after transmission is done
+            else {
+                TxAXIQ(false); // enters DMA FLUSH mode
+                TX_CONTROL.ddr_enabled = false; // stop immediately
+                dac_finish(&txpipe); // wait for currently enqued transfers to complete
+                // stream_write_ptr_rst() must be called to disable DMA FLUSH
                 stream_write_ptr_rst(TX_DAC_WR_DMA_CHANNEL, dac_axi_fifo_addr);
-            TX_CONTROL.burst_active = 0;
+                TX_CONTROL.burst_active = 0;
+            }
+            EnqueueProxyUpdate(PROXY_UPDATE_FLOW | PROXY_UPDATE_INFO | PROXY_UPDATE_INTERRUPT);
         }
-
-        // axiq_tx_disable(); // enters FLUSH mode, stream_write_ptr_rst() must be called to disable FLUSH
-        EnqueueProxyUpdate(PROXY_UPDATE_FLOW | PROXY_UPDATE_INFO | PROXY_UPDATE_INTERRUPT);
     }
 
     return lime_Result_Success;
@@ -388,7 +373,7 @@ static void check_dac_axi_status(const tx_pipeline_t *pipe) {
     axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, 0);
 }
 
-inline static void ddr_completion(tx_pipeline_t *pipe) {
+static void ddr_completion(tx_pipeline_t *pipe) {
     const uint32_t xfers_done = xfers_to_process(TX_CONTROL.ddr_rd_dma_ch_mask, pipe->ddr.input.fifo);
     if (!xfers_done)
         return;
@@ -405,11 +390,11 @@ inline static void ddr_completion(tx_pipeline_t *pipe) {
         if (TX_CONTROL.generate_tone && TX_CONTROL.ddr_enabled) // replace received data with generated one
             gen_nco_single_tone(chunk.addr, TX_DAC_DMA_SAMPLE_COUNT / TX_CONFIG.oversample, &tx_tone_state);
 
-        pipe->ddr.output.bytes_done += chunk.size;
+        pipe->ddr.output.bytes_done += TX_CONFIG.host_fifo_step;
         fifo_push(pipe->ddr.output.fifo, &chunk);
         // l1_trace(L1_TRACE_MSG_DMA_DDR_RD_COMP, (uint32_t)chunk.addr);
     }
-    player_state.data_flow.tx.consumed = pipe->ddr.output.bytes_done;
+    player_state.data_flow.tx.consumed += TX_CONFIG.host_fifo_step;
 
     uint32_t proxy_flags = PROXY_UPDATE_FLOW;
     if (pipe->ddr.output.bytes_done & 0xFFFF == 0)
@@ -429,23 +414,27 @@ static void ddr_enqueue(tx_pipeline_t *pipe) {
         if (dmac_is_available(TX_CONTROL.ddr_rd_dma_ch_mask) != TX_CONTROL.ddr_rd_dma_ch_mask)
             return;
 
+        if (TX_CONTROL.host_burst_size > 0 && TX_CONTROL.host_burst_size == pipe->ddr.input.bytes_done)
+            return; // don't do more ddr transfers when Tx burst length has been reached
+
         if (!TX_CONTROL.host_flow_control_disable) {
-            const uint32_t host_ddr_filled = player_state.data_flow.tx.produced - pipe->ddr.input.bytes_done;
-            bool overrun = host_ddr_filled > TX_CONFIG.ddr_size;
+            const uint32_t host_ddr_filled = player_state.data_flow.tx.produced - player_state.data_flow.tx.consumed;
+            const bool overrun = host_ddr_filled > TX_CONFIG.host_fifo_size;
             if (overrun)
                 ++player_state.data_flow.tx_issues.overrun;
-            if (host_ddr_filled < TX_CONFIG.ddr_step || overrun)
+            if (host_ddr_filled < TX_CONFIG.host_fifo_step || overrun)
                 return;
         }
 
         MemoryBlock_t chunk;
-        MemoryPool_t *mempool = TX_CONFIG.oversample > 1 ? &ddr_pool : &dac_pool;
+        MemoryPool_t *mempool = TX_CONFIG.oversample > 1 ? &ddr_pool : &dac_pool; // TODO: set once during configuration
         if (!mempool_pop(mempool, &chunk))
             return;
 
-        const uint32_t srcdata = TX_CONFIG.ddr_base_address + (pipe->ddr.input.bytes_done % TX_CONFIG.ddr_size);
+        const uint32_t srcdata =
+            TX_CONFIG.host_fifo_address + ((TX_CONTROL.burst_fifo_offset + pipe->ddr.input.bytes_done) % TX_CONFIG.host_fifo_size);
         const uint32_t dest = VSPA_HALF_WORDS(chunk.addr);
-        const uint32_t xfer_size = TX_CONFIG.ddr_step;
+        const uint32_t xfer_size = TX_CONFIG.host_fifo_step;
 
         DDR_read_multi_dma(DDR_RD_DMA_CHANNEL_1, TX_CONTROL.ddr_rd_dma_ch_nb, srcdata, dest, xfer_size);
 
@@ -469,7 +458,7 @@ inline static void dac_completion(tx_pipeline_t *pipe) {
         pipe->dac.output.bytes_done += TX_DMA_TXR_STEP;
         TRACE_TX(l1_trace(L1_TRACE_MSG_DMA_AXIQ_TX_COMP, (uint32_t)chunk.addr));
 
-        if (pipe->dac.output.bytes_done == TX_CONTROL.burst_end_bytes)
+        if (TX_CONTROL.host_burst_size > 0 && (TX_CONTROL.host_burst_size * TX_CONFIG.oversample) == pipe->dac.output.bytes_done)
             TX_CONTROL.burst_active = 0;
         mempool_push(&dac_pool, &chunk);
     }
@@ -486,8 +475,8 @@ inline static void dac_completion(tx_pipeline_t *pipe) {
 
 static void dac_finish(tx_pipeline_t *pipe) {
     uint32_t timeout = 10000000;
+    // need timeout just in case the DMA could be stuck waiting for trigger
     while ((dmac_is_enabled(TX_DAC_DMA_MASK) || fifo_size(pipe->dac.output.fifo)) && --timeout) {
-        // ProcessRx();
         dac_completion(pipe);
     }
     EnqueueProxyUpdate(PROXY_UPDATE_FLOW | PROXY_UPDATE_INFO | PROXY_UPDATE_INTERRUPT);
@@ -498,13 +487,6 @@ inline static void dac_enqueue(tx_pipeline_t *pipe) {
         return;
 
     for (uint32_t i = 0; i < 2; ++i) {
-        if (pipe->dac.input.bytes_done == TX_CONTROL.burst_end_bytes) {
-            l1_trace(L1_TRACE_MSG_TX_BURST_END, TX_CONTROL.burst_end_bytes);
-            TX_CONTROL.burst_active = 0;
-            EnqueueProxyUpdate(PROXY_UPDATE_INFO);
-            return; // Tx burst end reached, do not enqueue further data
-        }
-
         if (!dmac_is_available(TX_DAC_DMA_MASK))
             return;
 
@@ -515,11 +497,11 @@ inline static void dac_enqueue(tx_pipeline_t *pipe) {
         const uint32_t dac_xfer_size = TX_DMA_TXR_STEP;
         pipe->dac.input.bytes_done += dac_xfer_size;
 
-        uint32_t flags = DMAC_FIFO | DMAC_WRC | TX_DAC_WR_DMA_CHANNEL;
-        if (pipe->dac.input.bytes_done == TX_CONTROL.burst_end_bytes) {
-            flags |= DMAC_FIFO_RESET | DMAC_TRIG_IRQ;
-            l1_trace(L1_TRACE_MSG_DMA_PTR_RST, (uint32_t)chunk.addr);
-        }
+        const uint32_t flags = DMAC_FIFO | DMAC_WRC | TX_DAC_WR_DMA_CHANNEL;
+        // if (pipe->dac.input.bytes_done == TX_CONTROL.host_burst_size) {
+        //     flags |= DMAC_FIFO_RESET | DMAC_TRIG_IRQ;
+        //     l1_trace(L1_TRACE_MSG_DMA_PTR_RST, (uint32_t)chunk.addr);
+        // }
 
         // DAC is 12bit, AXIQ does conversion 16bit -> 12bit, by rounding 4LSB and downshifting
         stream_write(flags, dac_axi_fifo_addr, VSPA_HALF_WORDS(chunk.addr), dac_xfer_size);
@@ -574,10 +556,10 @@ void ProcessTx(void) {
         goto end_tx_push;
 
     dac_completion(&txpipe);
-    if (txpipe.dac.output.bytes_done == TX_CONTROL.burst_end_bytes) {
-        l1_trace(L1_TRACE_MSG_TX_BURST_END, (1 << 31) | TX_CONTROL.burst_end_bytes);
-        TxDDR_control(0); // disable Tx
-        VSPA_PROXY_update();
+
+    if (TX_CONTROL.host_burst_size > 0 && txpipe.dac.output.bytes_done == TX_CONTROL.host_burst_size * TX_CONFIG.oversample) {
+        l1_trace(L1_TRACE_MSG_TX_BURST_END, (1 << 31) | TX_CONTROL.host_burst_size);
+        TxDDR_control(0); // stop Tx
         return;
     }
 
@@ -605,7 +587,7 @@ end_tx_push:
             ++player_state.data_flow.tx_issues.xfer_config_errors;
         // g_stats->gbl_stats[ERROR_DMA_CONFIG_ERROR]++;
         l1_trace(L1_TRACE_MSG_DMA_CFGERR, tmp_dma_errors);
-        dmac_clear_errcfg();
+        dmac_clear_errcfg(txmask);
     };
 
     // update host proxy if needed
@@ -613,11 +595,6 @@ end_tx_push:
 }
 
 void TxSetBurstSize(uint32_t bytes) {
-    if (bytes == 0) {
-        TX_CONTROL.burst_end_bytes = 0xFFFFFFFF;
-        return;
-    }
-    const uint32_t dac_bytes = bytes * TX_CONFIG.oversample;
-    TX_CONTROL.burst_end_bytes = TX_CONTROL.burst_start_bytes + dac_bytes;
-    l1_trace(L1_TRACE_MSG_TX_SET_BURST_SIZE, TX_CONTROL.burst_end_bytes);
+    TX_CONTROL.host_burst_size = bytes;
+    // l1_trace(L1_TRACE_MSG_TX_SET_BURST_SIZE, TX_CONTROL_SET);
 }

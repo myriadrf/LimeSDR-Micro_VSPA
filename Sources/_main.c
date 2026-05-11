@@ -87,7 +87,7 @@ static void HandleCommand(uint64_t msg64) {
 
     switch (op_code) {
     case MBOX_OPC_TX_HOST_FIFO_CONFIG: {
-        TxHostFIFO(fifo_addr, fifo_size);
+        TxConfigureHostFIFO(fifo_addr, fifo_size);
         HostMBox0Post(MAKEDWORD(op_code, lime_Result_Success));
         break;
     }

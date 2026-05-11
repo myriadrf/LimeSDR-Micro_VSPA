@@ -12,8 +12,8 @@ typedef struct TxControl {
     uint32_t ddr_enabled;
     uint32_t generate_tone;
     uint32_t host_flow_control_disable;
-    uint32_t burst_start_bytes;
-    uint32_t burst_end_bytes;
+    uint32_t burst_fifo_offset;
+    uint32_t host_burst_size;
     uint32_t ddr_rd_dma_ch_nb;
     uint32_t ddr_rd_dma_ch_mask;
     uint32_t ddr_rd_dma_mBurst;
@@ -21,9 +21,9 @@ typedef struct TxControl {
 } tx_control_t;
 
 typedef struct TxConfig {
-    uint32_t ddr_base_address;
-    uint32_t ddr_size;
-    uint32_t ddr_step;
+    uint32_t host_fifo_address;
+    uint32_t host_fifo_size;
+    uint32_t host_fifo_step;
     uint32_t oversample;
 } tx_config_t;
 
@@ -31,7 +31,7 @@ void InitializeTx(void);
 
 void ProcessTx(void);
 
-void TxHostFIFO(uint32_t addr, uint32_t size);
+void TxConfigureHostFIFO(uint32_t la9310_addr, uint32_t size);
 lime_Result TxConfigure(uint32_t oversample);
 
 lime_Result TxControl(const tx_config_t *ctrl);

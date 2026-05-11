@@ -43,11 +43,6 @@ typedef struct tx_pipeline {
     struct Stage dac;
 } tx_pipeline_t;
 
-static inline void stage_setup(stage_t *s, struct MemoryFIFO *inputpool, struct MemoryFIFO *outputpool) {
-    s->input.fifo = inputpool;
-    s->output.fifo = outputpool;
-    s->input.bytes_done = 0;
-    s->output.bytes_done = 0;
-}
+void stage_setup(stage_t *s, struct MemoryFIFO *inputpool, struct MemoryFIFO *outputpool);
 
 #endif

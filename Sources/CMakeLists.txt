@@ -18,6 +18,7 @@ set(COMMON_IQPLAYER_SOURCE
     fifo.c
     memory_pool.c
     vspa_state.c
+    pipelines.c
 )
 
 # CMake does not recognize .sx as assembly, only .s or .asm
