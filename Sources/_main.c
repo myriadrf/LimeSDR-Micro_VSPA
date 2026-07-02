@@ -197,6 +197,8 @@ __attribute__((noreturn)) void main(void) {
 
         InitializeRx();
         InitializeTx();
+
+        iowr(IRQEN, 0x10, 0x10); // irqen_dma_cmp
     }
 
     while (1) {
