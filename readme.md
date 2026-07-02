@@ -18,8 +18,10 @@ If "VSPA_TOOL" environment variable is not set, CMake will download VSPA toolcha
 
 # Requirements
 
-VSPA toolchain compiler is 32bit only, so on 64bit host machine 32bit c/c++ libraries need to be installed.
+VSPA toolchain compiler is 32-bit only, so on 64-bit Debian/Ubuntu host machines 32-bit runtime libraries need to be installed.
+If `i386` is not already enabled in `dpkg --print-foreign-architectures`, add it first:
 ```
-sudo apt-get install libc6-i386
-sudo apt-get install libstdc++6:i386
+sudo dpkg --add-architecture i386
+sudo apt update
+sudo apt install libc6:i386 libstdc++6:i386
 ```
