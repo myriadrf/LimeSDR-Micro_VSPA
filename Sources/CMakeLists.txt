@@ -10,15 +10,14 @@ set(COMMON_IQPLAYER_SOURCE
     _main.c
     crt0.s
     dfe.c
-    # l1-trace.c
+    l1-trace.c
     tone_generator.c
     receiver.c
     transmitter.c
     dma_common.c
-    fifo.c
-    memory_pool.c
     vspa_state.c
-    pipelines.c
+    vspa_features.c
+    timer_control.c
 )
 
 # CMake does not recognize .sx as assembly, only .s or .asm
@@ -37,5 +36,5 @@ target_compile_definitions(limesdr-micro-iqplayer PRIVATE IQMOD_RX_1T1R)
 target_link_options(limesdr-micro-iqplayer PUBLIC ${COMMON_LINK_OPTIONS}
     LINKER:-Map,${EXECUTABLE_OUTPUT_PATH}/limesdr-micro-iqplayer.map
 )
-target_link_libraries(limesdr-micro-iqplayer PUBLIC vspa-kernel)
+target_link_libraries(limesdr-micro-iqplayer PUBLIC vspa-kernel vspa-sdk)
 set_target_properties(limesdr-micro-iqplayer PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})

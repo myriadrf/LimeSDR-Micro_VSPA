@@ -14,6 +14,8 @@ enum {
     PROXY_UPDATE_INTERRUPT = (1 << 2),
     PROXY_UPDATE_INTERNALS = (1 << 3),
     PROXY_UPDATE_TRACE = (1 << 4),
+    PROXY_UPDATE_RX = (1 << 5),
+    PROXY_UPDATE_TX = (1 << 6),
     PROXY_UPDATE_ALL = 0xFF,
 };
 
@@ -36,13 +38,6 @@ struct vspa_flow_control {
     struct flow_issues rx_issues[4];
 };
 
-struct channel_interface_info {
-    uint32_t ddr_base_address;
-    uint32_t ddr_size;
-    uint32_t ddr_step;
-    uint32_t oversample;
-};
-
 struct vspa_interface_info {
     tx_config_t tx_config;
     rx_config_t rx_config[4];
@@ -58,6 +53,8 @@ struct vspa_internals {
     rx_pipeline_t rxpipe[4];
     tx_control_t tx_control;
     rx_control_t rx_control[4];
+    dma_table_t tx_dma_schedule;
+    uint32_t go_count;
 };
 
 // proxy divided into sections for convenient partial updates using DMA
@@ -72,5 +69,13 @@ extern vspa_state_t player_state __attribute__((aligned(32)));
 extern void dmem_proxy_set_offset(uint32_t addr_offset);
 extern void EnqueueProxyUpdate(uint32_t flags);
 extern void VSPA_PROXY_update(void);
+extern void VSPA_PROXY_complete(void);
+
+typedef enum {
+    EVENT_TX_DONE = (1 << 0),
+    EVENT_RX_DONE = (1 << 0),
+} vspa_events_mask;
+
+extern void MarkEvent(uint32_t mask);
 
 #endif // VSPA_STATE_H

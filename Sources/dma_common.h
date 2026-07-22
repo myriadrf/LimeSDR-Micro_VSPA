@@ -5,6 +5,7 @@
 #define DMA_COMMON_H
 
 #include <stdint.h>
+#include "dmac.h"
 #include "fifo.h"
 
 // The ADC/DAC AXI FIFO is currently sized at 32 entries x 128-bit/entry:
@@ -49,6 +50,26 @@
 
 uint32_t dma_chan_mask(uint32_t dma_channel, uint8_t nb_dma);
 
+static inline void dmac_error_count(uint32_t mask, uint32_t *counter) {
+    if (!dmac_errxfr(mask))
+        return;
+
+    ++(*counter);
+    dmac_clear_errxfr(mask);
+}
+
 uint32_t xfers_to_process(uint32_t dma_mask, const struct MemoryFIFO *fifo);
+
+void wait_for_dma(uint32_t dma_mask);
+
+static bool did_timeout = false;
+#define WAIT_TIMEOUT_R(cond, timeout_cycles) \
+    do {                                     \
+        did_timeout = false;                 \
+        uint32_t timeout = timeout_cycles;   \
+        do {                                 \
+        } while (!(cond) && --timeout);      \
+        did_timeout = timeout == 0;          \
+    } while (0)
 
 #endif // DMA_COMMON_H

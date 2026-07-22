@@ -4,6 +4,7 @@
 #include "dma_common.h"
 
 #include "dmac.h"
+#include "l1-trace.h"
 
 uint32_t dma_chan_mask(uint32_t dma_channel, uint8_t nb_dma) {
     uint32_t mask = 0;
@@ -14,15 +15,8 @@ uint32_t dma_chan_mask(uint32_t dma_channel, uint8_t nb_dma) {
     return mask;
 }
 
-uint32_t xfers_to_process(uint32_t dma_mask, const struct MemoryFIFO *fifo) {
-    const uint32_t dma_pending = dmac_is_enabled(dma_mask);
-    const uint32_t dma_done = dmac_is_complete(dma_mask) == dma_mask;
-    uint32_t xfers_done = 0;
-    if (dma_done) {
-        dmac_clear_complete(dma_mask);
-        xfers_done = 1; // could be 2 if dma completed both DMA FIFO entries
-    }
-    if (!dma_pending)
-        xfers_done = fifo_size(fifo); // no pending transfers, consider all of them done
-    return xfers_done;
+void wait_for_dma(uint32_t dma_mask) {
+    do { // wait
+    } while (dmac_is_complete(dma_mask) != dma_mask && dmac_is_running(dma_mask));
+    dmac_clear_complete(dma_mask);
 }

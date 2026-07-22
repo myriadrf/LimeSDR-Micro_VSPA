@@ -48,7 +48,7 @@ entry("_start");
 // The formula is 2 * number_of_AU * 4 bytes
 DMEM_Line_Size        		= 4 * 2 * n_au();
 
-VCPU_OVERLAYSize			= 0x02000;
+VCPU_OVERLAYSize			= 0;
 OVERLAY_SIZE = (2*1024*1024);
 
 VCPU_PRAMSize = (32*1024); //(32*1024);
@@ -63,7 +63,7 @@ IPPU_DRAMSize = (16*1024);
 IPPU_TopMemAddress    		= 0x8000;
 
 HeapSize   = 0x00000;
-StackSize  = 0x00700;
+StackSize  = 0x00300;
 StackStart = VCPU_TopMemAddress - align((StackSize + HeapSize), DMEM_Line_Size);
 
 DDR_CODE_OVERLAY_Start		= 0x20000000;	// start address of the code sections for overlays
@@ -86,15 +86,11 @@ unit private (*){
 	KEEP( "*" (".my_code_2") ); 
 	
 	MEMORY {
-		.vpram 					("rx") 0 : org = 0x0, len = VCPU_PRAMSize-VCPU_OVERLAYSize;
-		.vpram_overlay 			("rx") 0 : AFTER(.vpram);
-
-		.ipram 					("rx") 3 : org = 0x0, len = IPPU_PRAMSize;
-
+		.vpram 					("rx") 0 : org = 0x0;
+		.ipram 					("rx") 3 : org = 0x0;
 		.vdram 					("rw") 1 : org = 0 ;
-		
-		.idram 					("rw") 2 : org = IPPU_DRAM_start;
-		.idram_overlay_space 	("rw") 2 : AFTER(.idram);
+		.idram 					("rw") 2 : org = IPPU_DRAM_start, len = IPPU_DRAMSize;
+		//.idram_overlay_space 	("rw") 2 : AFTER(.idram);
 		//.buglinker			    ("rw") 2 : org = 0x8000, len = 0x4000;
 		
 		//overlayed sections code/data
@@ -103,7 +99,7 @@ unit private (*){
 		vcpu_dram_to_overlay_1 	("rw") 6 : org = DDR_DATA_OVERLAY_Start;
 		vcpu_dram_to_overlay_2 	("rw") 6 : AFTER(vcpu_dram_to_overlay_1);
 		
-		memory_stack_and_heap 	("rw") 2 : org = StackStart , len = StackSize + HeapSize;	
+		memory_stack_and_heap 	("rw") 2 : org = StackStart , len = StackSize + HeapSize;
 	}
 	
 	SECTIONS {
@@ -113,6 +109,7 @@ unit private (*){
  		    .init
 			"*startup*.eln"(".text");
 			.text
+			text.vcpu
 			.default
 			.unlikely
 			unmatch_pgm("*");

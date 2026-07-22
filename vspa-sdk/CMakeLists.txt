@@ -1,4 +1,12 @@
-add_library(vspa-sdk src/vcpu.sx)
+add_library(vspa-sdk
+    src/vcpu.sx
+    src/memcopy.c
+    src/ovly.c
+    src/boot.c
+    src/axis.c
+    src/axiq-ls.c
+    src/axiq-hs.c
+)
 
 # CMake does not recognize .sx as assembly, only .s or .asm
 set_source_files_properties(
