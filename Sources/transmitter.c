@@ -157,7 +157,7 @@ static void ddr_enqueue(tx_pipeline_t *pipe);
 
 static inline bool should_ddr_enqueue(tx_pipeline_t *pipe) {
     const int16_t active_buffers = fifo_size(pipe->ddr.input.fifo) + fifo_size(pipe->ddr.output.fifo);
-    return dmac_is_available(DDR_RD_DMA_MASK) && active_buffers <= 2;
+    return dmac_is_available(DDR_RD_DMA_MASK) && fifo_size(pipe->ddr.input.fifo) < 2 && active_buffers <= 2;
 }
 
 static inline void interpolate(tx_pipeline_t *pipe) {

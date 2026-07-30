@@ -276,7 +276,7 @@ __attribute__((noreturn)) void main(void) {
     // if (ctrl & GO_REASON_DMA)
     uint32_t compl = dmac_is_complete(0xFFFF);
     if (compl ) {
-        const uint32_t events = dmac_event();
+        // const uint32_t events = dmac_event();
         // TRACE_EVENT(TG_VCPU, T_GO, compl, 1);
 
         // dmac_clear_event(events);
@@ -284,11 +284,11 @@ __attribute__((noreturn)) void main(void) {
             VSPA_PROXY_complete(); // dma_done_callback[15]();
         // if (compl & (1<<14))
         //     OnDDRWR_Completed();//dma_done_callback[14]();
-        if (events & (1 << 13))
+        if (dmac_event(1 << 13))
             OnDDRWR_Completed(1);
-        if (events & (1 << 12))
+        if (dmac_event(1 << 12))
             OnDDRWR_Completed(0);
-        if (events & (1 << 11))
+        if (dmac_event(1 << 11))
             OnDACWrite_Completed(); // dma_done_callback[11]();
         // if (compl & (1<<10))
         //     dma_done_callback[10]();
@@ -296,19 +296,19 @@ __attribute__((noreturn)) void main(void) {
         //     dma_done_callback[9]();
         // if (compl & (1<<8))
         //     dma_done_callback[8]();
-        if (events & (1 << 7))
+        if (dmac_event(1 << 7))
             OnDDRRD_Completed(); // dma_done_callback[7]();
         // if (compl & (1<<6))
         //     dma_done_callback[6]();
         // if (compl & (1<<5))
         //     dma_done_callback[5]();
-        if (events & (1 << 4)) // RX1
+        if (dmac_event(1 << 4)) // RX1
             OnADCRead_Completed(VSPA_RX1);
-        if (events & (1 << 3)) // RX0
+        if (dmac_event(1 << 3)) // RX0
             OnADCRead_Completed(VSPA_RX0);
-        if (events & (1 << 2))
+        if (dmac_event(1 << 2))
             OnADCRead_Completed(VSPA_RO1);
-        if (events & (1 << 1))
+        if (dmac_event(1 << 1))
             OnADCRead_Completed(VSPA_RO0);
         // if (compl & (1<<0))
         //     dma_done_callback[0]();
