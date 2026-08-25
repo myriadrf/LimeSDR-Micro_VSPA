@@ -13,8 +13,8 @@
 typedef struct DMA_LINE {
     uint64_t timestamp;
     uint32_t addr;
-    uint16_t size;
-    uint16_t flags;
+    uint32_t size;
+    uint32_t flags;
 } dma_line_t;
 
 typedef struct DMA_TABLE {

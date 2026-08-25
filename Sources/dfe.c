@@ -143,7 +143,7 @@ void rf_update_iq_comp_params(structTXIQCompParams *params_ptr, uint32_t rst, ui
     }
 }
 
-void rx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount) {
+void rx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint32_t samplesCount) {
     const uint32_t dmem_lines_count = 4 * samplesCount / DMEM_LINE_SIZE_BYTES;
 #ifdef RXIQCOMP2
     txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_rx, dmem_lines_count);
@@ -154,7 +154,7 @@ void rx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t s
 #endif
 }
 
-void tx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount) {
+void tx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint32_t samplesCount) {
     const uint32_t dmem_lines_count = 4 * samplesCount / DMEM_LINE_SIZE_BYTES;
 #ifdef TXIQCOMP2
     txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_tx, dmem_lines_count);

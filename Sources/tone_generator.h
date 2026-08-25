@@ -1,7 +1,8 @@
 #ifndef TONE_GENERATOR_H
 #define TONE_GENERATOR_H
 
-#include <vspa/intrinsics.h>
+#include "vcpu.h"
+
 #include <cstdint>
 
 typedef struct ToneState {
@@ -10,6 +11,6 @@ typedef struct ToneState {
     uint16_t freq_bin;
 } tone_state_t;
 
-void gen_nco_single_tone(vspa_complex_fixed16 *buffer, uint32_t samplesCount, tone_state_t *state);
+void gen_nco_single_tone(cfixed16_t *buffer, uint32_t samplesCount, tone_state_t *state);
 
 #endif

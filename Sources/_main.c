@@ -12,21 +12,23 @@
 #include "transmitter.h"
 #include "receiver.h"
 #include "l1-trace.h"
-#include "vspa_state.h"
-#include "vspa_features.h"
+#include "vspa_memorymap.h"
 
 #include "dma_common.h"
-#include "platform.h"
-#include "timer_control.h"
+#include "axiq-la9310.h"
 
-#include "compiler.h"
+#include "opstatus.h"
+#include "iqstream_signals.h"
+#include "vspa_iqstream.h"
 
-extern const feature_t features_map[];
+vspa_state_t state;
 
-D_STATIC bool first_run = true;
-D_STATIC inline void HostMBox0Post(uint64_t msg64) { host_mbox0_post(msg64); }
+extern const vspa_feature_t features_map[];
 
-D_STATIC void setup(void) {
+bool first_run = true;
+inline void HostMBox0Post(uint64_t msg64) { host_mbox0_post(msg64); }
+
+void setup(void) {
     uint64_t msg64 = 0;
 
     vcpu_swver(0x00020002);
@@ -61,86 +63,85 @@ D_STATIC void setup(void) {
     host_clear();
     host_mbox0_enable();
     host_mbox1_enable();
-
-    memclr(&player_state, sizeof(player_state));
 }
 
-D_STATIC __attribute__((noreturn)) void SwReset(void) __noreturn {
-    extern void start(void);
-    entry(start);
-    host_clear();
-    dmac_clear_event();
+__attribute__((noreturn)) static void terminate(void) __noreturn {
+    // Control register:
+    iowr(CONTROL, 0x00F000A2, 0x0FF01AA3); // disable all GOs
+    iowr(DMA_STAT_ABORT, 0xFFFFFFFF);
+
+    // Host interface:
+    iowr(HOST_VCPU_FLAGS0, 0xFFFFFFFF);
+    iowr(HOST_VCPU_FLAGS1, 0xFFFFFFFF);
+    iowr(VCPU_IN_0_MSB, 0xFFFFFFFF);
+    iowr(VCPU_IN_1_MSB, 0xFFFFFFFF);
+    iowr(VCPU_IN_0_LSB, 0xFFFFFFFF);
+    iowr(VCPU_IN_1_LSB, 0xFFFFFFFF);
+
+    // External event interface:
+    iowr(EXT_GO_ENA, 0); // Disable all external events.
+    iowr(EXT_GO_STAT, 0xFF); // Clear all external events.
+
+    // AXI slave interface:
+    // Disable AXI slave events.
+    iowr(AXISLV_GOEN1, 0);
+    iowr(AXISLV_GOEN0, 0);
+    // Clear all AXI slave flags
+    iowr(AXISLV_FLAGS0, 0xFFFFFFFF);
+    iowr(AXISLV_FLAGS1, 0xFFFFFFFF);
+
+    // DMA engine:
+    while (iord(DMA_XRUN_STAT)) {
+    }
+    iowr(DMA_XFRERR_STAT, 0xFFFFFFFF);
+    iowr(DMA_CFGERR_STAT, 0xFFFFFFFF);
+    iowr(DMA_COMP_STAT, 0xFFFFFFFF);
+    iowr(DMA_GO_STAT, 0xFFFFFFFF);
+
+    // IPPU engine:
+    iowr(IPPURC, (0x1 << 29) | (0x1 << 31)); // Abort and clear any pending error.
+
+    // FECU engine:
+    iowr(0x300 >> 2, 0x1 << 2); // Disable all pending operations.
+    iowr(0x364 >> 2, 0x1 << 10); // Clear error.
+
+    // Entry point & stack pointer:
+    iowr(VCPU_GO_ADDR, 0x0); // Initial entry point. PMEM
+    // iowr(VCPU_GO_STACK, 0x0); // Stack base address. DMEM
+    __builtin_done();
+}
+
+__attribute__((noreturn)) void SwReset(void) __noreturn {
+
     HostMBox0Post(MAKEDWORD(0x0, 0x1));
-    __idle();
+    axiq_fifo_rx_disable(AXIQ_BANK_0, AXIQ_FIFO_RX0);
+    axiq_fifo_rx_disable(AXIQ_BANK_0, AXIQ_FIFO_RX1);
+    axiq_fifo_rx_disable(AXIQ_BANK_0, AXIQ_FIFO_RX2);
+    axiq_fifo_rx_disable(AXIQ_BANK_0, AXIQ_FIFO_RX3);
+    axiq_fifo_tx_disable(AXIQ_BANK_0, AXIQ_FIFO_TX0);
+    terminate();
 }
 
-D_STATIC uint64_t HandleCommand(uint64_t msg64) {
+uint64_t HandleCommand(uint64_t msg64) {
     const mbox_opc_e op_code = (mbox_opc_e)((HIWORD(msg64) & 0xFF000000) >> 24);
     const uint32_t msg_msb = HIWORD(msg64);
     const uint32_t msg_lsb = LOWORD(msg64);
 
-    const e_rx_channel rx_index = (e_rx_channel)((msg_msb & 0x00300000) >> 20);
     const uint32_t fifo_size = (msg_msb & 0x0000FFFF) * 4096;
     const uint32_t fifo_addr = msg_lsb;
 
     switch (op_code) {
-    case MBOX_OPC_RX_HOST_FIFO_CONFIG: {
-        ConfigRxHostFIFO(rx_index, fifo_addr, fifo_size);
-        return (MAKEDWORD(op_code, lime_Result_Success));
-        break;
-    }
-    case MBOX_OPC_TX_CONFIGURE: {
-        const uint32_t interpolation = 1 << (msg_lsb & 0x3);
-        return (MAKEDWORD(op_code, TxConfigure(interpolation)));
-        break;
-    }
-    case MBOX_OPC_RX_CONFIGURE: {
-        const uint32_t decimation = 1 << (msg_lsb & 0x3);
-        return (MAKEDWORD(op_code, RxChannelConfigure(rx_index, decimation)));
-        break;
-    }
-    case MBOX_OPC_TX_CONTROL:
-        return (MAKEDWORD(op_code, TxDDR_control(msg64)));
-        break;
-    case MBOX_OPC_RX_CONTROL:
-        return (MAKEDWORD(op_code, RxDDR_control(rx_index, msg64)));
-        break;
-
     case MBOX_OPC_SINGLE_TONE_TX:
-        TxTone_control(msg64);
+        // TxTone_control(msg64);
         return (MAKEDWORD(0, 0x1));
-        break;
-
-    case MBOX_OPC_SINGLE_TONE_RX:
-        // RX_single_tone_measurement();
-        break;
-
-    case MBOX_OPC_RX_CHAN_SELECT:
-        return (MAKEDWORD(op_code, RxChannelSelect(msg_lsb & 0xf)));
         break;
 
     case MBOX_OPC_DONE_SWRESET:
         SwReset();
         break;
 
-    case MBOX_OPC_PROXY_OFFSET: {
-        const uint32_t proxy_offset_read_only = ((msg_msb & 0x00100000) >> 20); /* bit 52 */
-        if (!proxy_offset_read_only)
-            dmem_proxy_set_offset(msg_lsb);
-        return (MAKEDWORD(msg_lsb, lime_Result_Success));
-        break;
-    }
-
-    case MBOX_OPC_RX_PREPARE: {
-        return (MAKEDWORD(op_code, RxPrepare()));
-    }
-
     case MBOX_OPC_GET_FEATURES_MAP: {
         return (MAKEDWORD(VSPA_HALF_WORDS(features_map), lime_Result_Success));
-    }
-
-    case MBOX_OPC_TX_DMA_SUBMIT: {
-        return (MAKEDWORD(op_code, TxDMASubmit()));
     }
 
     default:
@@ -152,10 +153,7 @@ D_STATIC uint64_t HandleCommand(uint64_t msg64) {
 }
 
 // called by bootloader on first run
-void BootEntry(void) {
-    dmac_clear_error();
-    dmac_clear_complete();
-    dmac_clear_event();
+static void BootEntry(void) {
     l1_trace_init();
 
     // !! this workaround is needed otherwise VSPA gets stuck ( dmac_is_available()/dmac_is_complete() doesn't work)
@@ -164,13 +162,7 @@ void BootEntry(void) {
     iowr(HOST_VCPU_A011455, 0x10, 0x10);
     setup();
 
-    // update host vspa_dmem_proxy
-    player_state.info.dmemProxyOffset = (uint32_t)&player_state;
-
-    InitializeRx();
-    InitializeTx();
-
-    iowr(IRQEN, 0x10, 0x10); // irqen_dma_cmp
+    // iowr(IRQEN, 0x10, 0x10); // irqen_dma_cmp
 
     // clear HOST_GO bit
     iowr(CONTROL,
@@ -184,7 +176,7 @@ void BootEntry(void) {
     // entry(main);
 }
 
-D_STATIC inline void ProcessMBox(void) {
+inline void ProcessMBox(void) {
     if (vspa_mbox0_is_valid()) // message from Host
     {
         const uint64_t cmd = host_mbox0_read();
@@ -197,18 +189,6 @@ D_STATIC inline void ProcessMBox(void) {
         host_mbox1_clear();
         host_mbox1_post(HandleCommand(cmd));
     }
-}
-
-D_STATIC inline void ProcessHostFlags(void) {
-    const uint32_t flags = iord(HOST_VCPU_FLAGS0);
-    switch (flags) {
-    case 0:
-        return;
-    case 1:
-        HostProducedEvent();
-        break;
-    }
-    iowr(HOST_VCPU_FLAGS0, 0xFFFFFFFF);
 }
 
 #define GO_REASON_HOST_READ_MSG1 (1 << 23)
@@ -225,71 +205,46 @@ D_STATIC inline void ProcessHostFlags(void) {
 #define GO_REASON_IPPU (1 << 1)
 #define GO_REASON_HOST (1 << 0)
 
-// void EmptyFunc(void)
-// {}
-
-// typedef void (*void_fptr)(void);
-// static const void_fptr dma_done_callback[16] =
-// {
-//     &EmptyFunc, // DDR_WR_DMA_CHANNEL_5
-//     &OnADCRead_Completed, // RO0_ADC_RD_DMA_CHANNEL
-//     &OnADCRead_Completed, // RO1_ADC_RD_DMA_CHANNEL
-//     &OnADCRead_Completed, // RX0_ADC_RD_DMA_CHANNEL
-//     &OnADCRead_Completed, // RX1_ADC_RD_DMA_CHANNEL
-//     &EmptyFunc, // AUX_ADC
-//     &EmptyFunc, // RSSI
-//     &OnDDRRD_Completed, // DDR_RD_1
-//     &EmptyFunc, // DDR_RD_2
-//     &EmptyFunc, // DDR_RD_3
-//     &EmptyFunc, // DDR_RD_4
-//     &OnDACWrite_Completed, // TX_DAC
-//     &EmptyFunc, // DDR_WR_1
-//     &check_l1_trace_complete, // DDR_WR_2
-//     &OnDDRWR_Completed, // DDR_WR_3
-//     &VSPA_PROXY_complete, // DDR_WR_4
-// };
-
 // gets called by event triggers
 __attribute__((noreturn)) void main(void) {
-    // TRACE_START_DURATION(t1);
     if (first_run) {
         BootEntry();
         entry(main);
         first_run = false;
-        iowr(EXT_GO_STAT, 0xFF, 0xFF); // clear external GO
-        timer_trig_immediate(VSPA_GO_PHYTIMER_ID, ePhyTimerComparatorOut0); // GO triggered only by rising edge
+
+        receiver_init();
+        transmitter_init();
     }
+    ++state.go_count;
+
+    TRACE_START_DURATION(t1);
     const uint32_t ctrl = iord(CONTROL);
-    TRACE_BEGIN(T_GO, 1, ctrl);
-    ++player_state.internals.go_count;
+
+    // TRACE_BEGIN(T_GO, 1, ctrl);
 
     // DMA is time critical, process it first
     if (ctrl & GO_REASON_EXT) // phytimer triggered GO
     {
         TRACE_EVENT(T_EXTERNAL_GO, 1, 0);
 
-        if (DAC_Flush()) {
-            iowr(EXT_GO_STAT, 0xFF, 0xFF); // clear external GO
-        }
+        // iowr(EXT_GO_STAT, 0xFF, 0xFF); // clear external GO
     }
 
-    // if (ctrl & GO_REASON_DMA)
-    uint32_t compl = dmac_is_complete(0xFFFF);
-    if (compl ) {
+    if (ctrl & GO_REASON_DMA) {
         // const uint32_t events = dmac_event();
         // TRACE_EVENT(TG_VCPU, T_GO, compl, 1);
 
         // dmac_clear_event(events);
-        if (compl &(1 << 15))
-            VSPA_PROXY_complete(); // dma_done_callback[15]();
+        // if (compl &(1 << 15))
+        //     VSPA_PROXY_complete(); // dma_done_callback[15]();
         // if (compl & (1<<14))
         //     OnDDRWR_Completed();//dma_done_callback[14]();
-        if (dmac_event(1 << 13))
-            OnDDRWR_Completed(1);
-        if (dmac_event(1 << 12))
-            OnDDRWR_Completed(0);
-        if (dmac_event(1 << 11))
-            OnDACWrite_Completed(); // dma_done_callback[11]();
+        if (dmac_is_complete(1 << 13))
+            ddr_dma_complete(1);
+        if (dmac_is_complete(1 << 12))
+            ddr_dma_complete(0);
+        if (dmac_is_complete(1 << 11))
+            dac_dma_complete(0);
         // if (compl & (1<<10))
         //     dma_done_callback[10]();
         // if (compl & (1<<9))
@@ -297,24 +252,22 @@ __attribute__((noreturn)) void main(void) {
         // if (compl & (1<<8))
         //     dma_done_callback[8]();
         if (dmac_event(1 << 7))
-            OnDDRRD_Completed(); // dma_done_callback[7]();
+            tx_ddr_complete(0); // dma_done_callback[7]();
         // if (compl & (1<<6))
         //     dma_done_callback[6]();
         // if (compl & (1<<5))
         //     dma_done_callback[5]();
-        if (dmac_event(1 << 4)) // RX1
-            OnADCRead_Completed(VSPA_RX1);
-        if (dmac_event(1 << 3)) // RX0
-            OnADCRead_Completed(VSPA_RX0);
-        if (dmac_event(1 << 2))
-            OnADCRead_Completed(VSPA_RO1);
-        if (dmac_event(1 << 1))
-            OnADCRead_Completed(VSPA_RO0);
+        if (dmac_is_complete(1 << 4)) // RX1
+            adc_dma_complete(1);
+        if (dmac_is_complete(1 << 3)) // RX0
+            adc_dma_complete(0);
+        if (dmac_is_complete(1 << 2))
+            adc_dma_complete(1);
+        if (dmac_is_complete(1 << 1))
+            adc_dma_complete(0);
         // if (compl & (1<<0))
         //     dma_done_callback[0]();
     }
-
-    // TRACE_DURATION(T_GO, 1, t1);
 
     if (ctrl & (GO_REASON_HOST_SENT_MSG0 | GO_REASON_HOST_SENT_MSG1)) {
         TRACE_START_DURATION(t2);
@@ -323,14 +276,16 @@ __attribute__((noreturn)) void main(void) {
     }
 
     if (ctrl & GO_REASON_HOST_VSP_FLAGS) {
-        // TRACE_START_DURATION(t3);
-        ProcessHostFlags();
-        // TRACE_DURATION(T_HOST_PRODUCE, 1, t3);
+        const uint32_t f = iord(HOST_VCPU_FLAGS0);
+        TRACE_START_DURATION(t3);
+        HandleCommandFlags();
+        TRACE_DURATION(T_HOST_PRODUCE, f, t3);
     }
 
-    VSPA_PROXY_update();
+    TRACE_DURATION(T_GO, ctrl, t1);
+    // TRACE_END(T_GO, 1, ctrl);
+    // VSPA_PROXY_update();
     push_traces();
 
-    TRACE_END(T_GO, 1, ctrl);
     __builtin_done();
 }

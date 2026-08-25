@@ -59,7 +59,7 @@ extern structTXIQCompParams rxiqcompcfg_struct _VSPA_VECTOR_ALIGN;
 void rf_update_iq_comp_params2(structTXIQCompParams2 *params_ptr, uint32_t rst, uint32_t idx, uint32_t val);
 void rf_update_iq_comp_params(structTXIQCompParams *params_ptr, uint32_t rst, uint32_t idx, uint32_t val);
 
-void rx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount);
-void tx_qec_correction(const cfixed16_t *dataIn, cfixed16_t *dataOut, uint32_t samplesCount);
+void rx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint32_t samplesCount);
+void tx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint32_t samplesCount);
 
 #endif /* DFE_H_ */

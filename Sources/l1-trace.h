@@ -11,7 +11,7 @@
 #define DEFAULT_THREAD_ID 1
 
 typedef struct l1_trace_data_s {
-    uint64_t cnt;
+    uint64_t cnt; // VSPA has only 48bit counter
     uint32_t msg;
     uint32_t param;
 } l1_trace_data_t;

@@ -51,7 +51,7 @@ DMEM_Line_Size        		= 4 * 2 * n_au();
 VCPU_OVERLAYSize			= 0;
 OVERLAY_SIZE = (2*1024*1024);
 
-VCPU_PRAMSize = (32*1024); //(32*1024);
+VCPU_PRAMSize = (32*1024);
 IPPU_PRAMSize = (2*1024);
 
 VCPU_DRAM_start = 0x0000;
@@ -63,7 +63,7 @@ IPPU_DRAMSize = (16*1024);
 IPPU_TopMemAddress    		= 0x8000;
 
 HeapSize   = 0x00000;
-StackSize  = 0x00300;
+StackSize  = 1024 ;
 StackStart = VCPU_TopMemAddress - align((StackSize + HeapSize), DMEM_Line_Size);
 
 DDR_CODE_OVERLAY_Start		= 0x20000000;	// start address of the code sections for overlays
@@ -117,8 +117,7 @@ unit private (*){
 		} > .vpram;
 		
 		.data {
-            .dmem_proxy_tx
-            .dmem_proxy_rx
+			.mmap_entry
             .vcpu_dmem
 		    __data_start = .;
 			.rom

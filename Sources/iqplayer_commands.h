@@ -4,6 +4,8 @@
 #ifndef IQPLAYER_COMMANDS_H
 #define IQPLAYER_COMMANDS_H
 
+#include <stdint.h>
+
 typedef enum {
     MBOX_OPC_EMPTY_0, // 0x0
     MBOX_OPC_SINGLE_TONE_TX, // 0x1

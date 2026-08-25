@@ -697,7 +697,7 @@ static inline uint32_t vcpu_hwver(void) { return iord(HWVERSION); }
 
 #pragma cplusplus on
 //! @brief      Read the VCPU software version number.
-//! @return     The VCPU sofwtare version number.
+//! @return     The VCPU software version number.
 static inline uint32_t vcpu_swver(void) { return iord(SWVERSION); }
 
 //! @brief      Write the VCPU software version number.

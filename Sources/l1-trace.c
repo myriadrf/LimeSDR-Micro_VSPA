@@ -7,21 +7,19 @@
 #include "dma_common.h"
 #include "dmac.h"
 
-#include "compiler.h"
-
 #if TRACE_ENABLED
 
 #define L1_TRACE_CAPACITY (128)
 
-#define L1_TRACE_DMA_CHANNEL DDR_WR_DMA_CHANNEL_3
+#define L1_TRACE_DMA_CHANNEL DDR_WR_DMA_CHANNEL_4
 
 l1_trace_hif_t trace_hif = { 0, 0, 0, 0, 0 };
 
 // double buffer, fill one while another is DMA tranferred
-D_STATIC l1_trace_data_t events_buffer[2][L1_TRACE_CAPACITY] __attribute__((aligned(16), section(".vcpu_dmem")));
-D_STATIC uint16_t events_buffer_fill[2] = { 0, 0 };
-D_STATIC uint16_t events_active_buffer = 0;
-D_STATIC uint16_t sentsize = 0;
+l1_trace_data_t events_buffer[2][L1_TRACE_CAPACITY] __attribute__((aligned(64), section(".ippu_dmem")));
+uint16_t events_buffer_fill[2] = { 0, 0 };
+uint16_t events_active_buffer = 0;
+uint16_t sentsize = 0;
 
 void l1_trace_init(void) {
     ccnt_disable();
@@ -98,14 +96,14 @@ void l1_trace(uint32_t msg, uint32_t param) {
     events_buffer[events_active_buffer][events_buffer_fill[events_active_buffer]].cnt = ccnt_read(); // ccnt_read itself is 5 cycles
     events_buffer[events_active_buffer][events_buffer_fill[events_active_buffer]].msg = msg;
     events_buffer[events_active_buffer][events_buffer_fill[events_active_buffer]].param = param;
-    ++events_buffer_fill[events_active_buffer];
+    events_buffer_fill[events_active_buffer] = (events_buffer_fill[events_active_buffer] + 1) & (L1_TRACE_CAPACITY - 1);
 }
 
 void l1_trace_duration(uint64_t startcnt, uint32_t msg) {
     events_buffer[events_active_buffer][events_buffer_fill[events_active_buffer]].cnt = startcnt; // ccnt_read itself is 5 cycles
     events_buffer[events_active_buffer][events_buffer_fill[events_active_buffer]].msg = msg;
     events_buffer[events_active_buffer][events_buffer_fill[events_active_buffer]].param = ccnt_read() - startcnt;
-    ++events_buffer_fill[events_active_buffer];
+    events_buffer_fill[events_active_buffer] = (events_buffer_fill[events_active_buffer] + 1) & (L1_TRACE_CAPACITY - 1);
 }
 
 void check_l1_trace_complete(void) {

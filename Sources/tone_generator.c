@@ -10,7 +10,7 @@
 #define MEM_LINE_SIZE (512 / 32)
 
 #pragma optimization_level 0
-void gen_nco_single_tone(vspa_complex_fixed16 *buffer, uint32_t samplesCount, tone_state_t *state) {
+void gen_nco_single_tone(cfixed16_t *buffer, uint32_t samplesCount, tone_state_t *state) {
     vspa_complex_float32 gain;
     gain.real = state->amplitude;
     gain.imag = 0;

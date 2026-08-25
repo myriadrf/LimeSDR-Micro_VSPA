@@ -4,9 +4,10 @@
 #ifndef DMA_COMMON_H
 #define DMA_COMMON_H
 
-#include <stdint.h>
 #include "dmac.h"
-#include "fifo.h"
+
+#include <stdint.h>
+#include <stdbool.h>
 
 // The ADC/DAC AXI FIFO is currently sized at 32 entries x 128-bit/entry:
 // enough space to buffer up to two 16-beat bursts from AXI.
@@ -48,21 +49,13 @@
 // VSPA addresing is in 16bit granularity
 #define VSPA_HALF_WORDS(x) (2 * (uint32_t)x)
 
+// VSPA addresses in half words (16bits), DMA uses bytes (8bits)
+#define VCPU_ADDR_FOR_DMA(x) (((uint32_t)x) << 1)
+
 uint32_t dma_chan_mask(uint32_t dma_channel, uint8_t nb_dma);
 
-static inline void dmac_error_count(uint32_t mask, uint32_t *counter) {
-    if (!dmac_errxfr(mask))
-        return;
-
-    ++(*counter);
-    dmac_clear_errxfr(mask);
-}
-
-uint32_t xfers_to_process(uint32_t dma_mask, const struct MemoryFIFO *fifo);
-
-void wait_for_dma(uint32_t dma_mask);
-
 static bool did_timeout = false;
+
 #define WAIT_TIMEOUT_R(cond, timeout_cycles) \
     do {                                     \
         did_timeout = false;                 \

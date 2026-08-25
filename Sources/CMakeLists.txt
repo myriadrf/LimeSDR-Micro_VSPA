@@ -15,9 +15,8 @@ set(COMMON_IQPLAYER_SOURCE
     receiver.c
     transmitter.c
     dma_common.c
-    vspa_state.c
-    vspa_features.c
-    timer_control.c
+    vspa_memorymap.c
+    iqstream_signals.c
 )
 
 # CMake does not recognize .sx as assembly, only .s or .asm
