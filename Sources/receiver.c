@@ -26,7 +26,7 @@
 // #define addr_beat_offset (0x1000 - RX_ADC_FIFO_BEAT_COUNT*16)
 #define addr_beat_offset 0
 
-#define XFER_SAMPLES 256
+#define XFER_SAMPLES 512
 
 #define ADC_XFER_SAMPLE_COUNT XFER_SAMPLES
 #define ADC_XFER_SIZE_BYTES (ADC_XFER_SAMPLE_COUNT * 4)
