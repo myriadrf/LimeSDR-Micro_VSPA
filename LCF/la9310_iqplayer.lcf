@@ -63,7 +63,7 @@ IPPU_DRAMSize = (16*1024);
 IPPU_TopMemAddress    		= 0x8000;
 
 HeapSize   = 0x00000;
-StackSize  = 1024 ;
+StackSize  = 512 ;
 StackStart = VCPU_TopMemAddress - align((StackSize + HeapSize), DMEM_Line_Size);
 
 DDR_CODE_OVERLAY_Start		= 0x20000000;	// start address of the code sections for overlays
@@ -89,7 +89,7 @@ unit private (*){
 		.vpram 					("rx") 0 : org = 0x0;
 		.ipram 					("rx") 3 : org = 0x0;
 		.vdram 					("rw") 1 : org = 0 ;
-		.idram 					("rw") 2 : org = IPPU_DRAM_start, len = IPPU_DRAMSize;
+		.idram 					("rw") 2 : org = IPPU_DRAM_start; //, len = IPPU_DRAMSize;
 		//.idram_overlay_space 	("rw") 2 : AFTER(.idram);
 		//.buglinker			    ("rw") 2 : org = 0x8000, len = 0x4000;
 		

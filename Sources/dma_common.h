@@ -22,6 +22,8 @@
 // multiple subsequent 'ptr_rst_req' calls will cause DMA to get stuck.
 // To unstuck, 'tx_dma_allowed' has to be triggered twice.
 
+#define MAX_DMA_ENQ 2
+
 #define DDR_WR_DMA_CHANNEL_5 0x0
 
 #define RO0_ADC_RD_DMA_CHANNEL 0x1

@@ -9,8 +9,6 @@ extern struct DebugStats2 stats2;
 
 void HandleCommandFlags(void) {
     uint32_t flags = iord(HOST_VCPU_FLAGS0);
-    if (flags & HTV_SIGNAL_TXLANE0_UNBRICK)
-        ++stats2.afe_udr;
 
     for (int lane = 0; lane < RX_MAX_LANE_COUNT; ++lane) {
         if (flags & (HTV_SIGNAL_RXLANE0_ABORT << lane))

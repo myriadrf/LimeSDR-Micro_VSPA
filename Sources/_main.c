@@ -168,7 +168,7 @@ static void BootEntry(void) {
     iowr(CONTROL,
          0x0 | (1 << 25) // host msg1 go
              | (1 << 24) // host msg0 go
-             | (1 << 11) // host to vcpu flags go
+             | (1 << 11) // host to vcpu flags0 go
          ,
          0x0F000001 | (1 << 11));
 
@@ -243,7 +243,7 @@ __attribute__((noreturn)) void main(void) {
             ddr_dma_complete(1);
         if (dmac_is_complete(1 << 12))
             ddr_dma_complete(0);
-        if (dmac_is_complete(1 << 11))
+        if (dmac_event(1 << 11))
             dac_dma_complete(0);
         // if (compl & (1<<10))
         //     dma_done_callback[10]();
@@ -257,13 +257,13 @@ __attribute__((noreturn)) void main(void) {
         //     dma_done_callback[6]();
         // if (compl & (1<<5))
         //     dma_done_callback[5]();
-        if (dmac_is_complete(1 << 4)) // RX1
+        if (dmac_event(1 << 4)) // RX1
             adc_dma_complete(1);
-        if (dmac_is_complete(1 << 3)) // RX0
+        if (dmac_event(1 << 3)) // RX0
             adc_dma_complete(0);
-        if (dmac_is_complete(1 << 2))
+        if (dmac_event(1 << 2))
             adc_dma_complete(1);
-        if (dmac_is_complete(1 << 1))
+        if (dmac_event(1 << 1))
             adc_dma_complete(0);
         // if (compl & (1<<0))
         //     dma_done_callback[0]();

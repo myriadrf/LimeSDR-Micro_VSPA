@@ -15,7 +15,7 @@ IF(NOT CMAKE_BUILD_TYPE)
 ENDIF()
 
 add_compile_options(
-    -O3
+    -O2
     -Os
     -nostartup-files
     -ansi off
@@ -29,8 +29,8 @@ add_link_options(
     $<$<CONFIG:Release>:LINKER:-S> # Strips debug information from the executable object file.
     $<$<CONFIG:Release>:LINKER:-xd> # Instructs the linker to remove symbols that were emitted by the compiler and assembler for debugging sections.
     $<$<CONFIG:Release>:LINKER:-x> # Removes all local symbols from the symbol table.
-    $<$<CONFIG:Release>:LINKER:-enable-stack-effect>
-    $<$<CONFIG:Release>:LINKER:-display-section-total>
+    LINKER:-enable-stack-effect
+    LINKER:-display-section-total
 )
 
 message(STATUS "BUILD_TYPE: " ${CMAKE_BUILD_TYPE})

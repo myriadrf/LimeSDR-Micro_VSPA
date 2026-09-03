@@ -31,7 +31,7 @@ set(COMMON_LINK_OPTIONS -mem ${LA9310_LINKER_SCRIPT} -nostartup-files)
 add_executable(limesdr-micro-iqplayer
     ${COMMON_IQPLAYER_SOURCE}
 )
-target_compile_definitions(limesdr-micro-iqplayer PRIVATE IQMOD_RX_1T1R)
+
 target_link_options(limesdr-micro-iqplayer PUBLIC ${COMMON_LINK_OPTIONS}
     LINKER:-Map,${EXECUTABLE_OUTPUT_PATH}/limesdr-micro-iqplayer.map
 )

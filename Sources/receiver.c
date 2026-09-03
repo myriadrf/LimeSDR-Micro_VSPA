@@ -10,6 +10,7 @@
 
 #include "dma_common.h"
 #include "iqstream_signals.h"
+#include "vspa_iqstream.h"
 
 #include "axiq-la9310.h"
 #include "vcpu.h"
@@ -25,15 +26,16 @@
 // #define addr_beat_offset (0x1000 - RX_ADC_FIFO_BEAT_COUNT*16)
 #define addr_beat_offset 0
 
-#define MAX_DMA_ENQ 2
-#define ADC_XFER_SAMPLE_COUNT 512
+#define XFER_SAMPLES 256
+
+#define ADC_XFER_SAMPLE_COUNT XFER_SAMPLES
 #define ADC_XFER_SIZE_BYTES (ADC_XFER_SAMPLE_COUNT * 4)
 
-#define DDR_XFER_SAMPLE_COUNT 512
+#define DDR_XFER_SAMPLE_COUNT XFER_SAMPLES
 #define DDR_XFER_SIZE_BYTES (DDR_XFER_SAMPLE_COUNT * 4)
 
 cfixed16_t adc_buffer[RX_MAX_LANE_COUNT][MAX_DMA_ENQ * ADC_XFER_SAMPLE_COUNT]
-    __attribute__((DMEM_ALIGNMENT_ATTR, section(".ippu_dmem")));
+    __attribute__((DMEM_ALIGNMENT_ATTR, section(".vcpu_dmem")));
 cfixed16_t ddr_write_buffer[RX_MAX_LANE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT]
     __attribute__((DMEM_ALIGNMENT_ATTR, section(".ippu_dmem")));
 
@@ -46,8 +48,10 @@ const float rx_filter_taps_downsampling[8] __attribute__((aligned(64))) = {
 };
 
 // ddc2x4x.sx prototypes
-extern void decimator_2x_8_Taps_asm(cfixed16_t *pOut, cfixed16_t *pIn, float32_t *pTaps, cfixed16_t *filtState, uint32_t n_samples);
-extern void decimator_4x_8_Taps_asm(cfixed16_t *pOut, cfixed16_t *pIn, float32_t *pTaps, cfixed16_t *filtState, uint32_t n_samples);
+extern void decimator_2x_8_Taps_asm(cfixed16_t *pOut, volatile cfixed16_t *pIn, const float32_t *pTaps, cfixed16_t *filtState,
+                                    uint32_t n_samples);
+extern void decimator_4x_8_Taps_asm(cfixed16_t *pOut, volatile cfixed16_t *pIn, const float32_t *pTaps, cfixed16_t *filtState,
+                                    uint32_t n_samples);
 
 tone_state_t rx_generator[RX_MAX_LANE_COUNT];
 
@@ -56,9 +60,47 @@ struct DebugStats stats;
 rx_ddr_pipeline_t rxddr[RX_MAX_LANE_COUNT];
 adc_pipeline_t adc[RX_MAX_LANE_COUNT];
 
-static inline void rx_adc_reset(adc_pipeline_t *adc, cfixed16_t *buffer) {
+// PTR_RST must be done after:
+// dma_allowed falling edge
+static inline void stream_read_ptr_rst(uint16_t lane) {
+    const uint32_t ctrl = DMAC_FIFO_RESET | DMAC_RDC | adc[lane].dma_channel;
+    dmac_enable(ctrl, 128, adc[lane].axi_fifo_addr, VCPU_ADDR_FOR_DMA(adc_buffer[lane]));
+}
+
+static void rx_axiq_fifo_reset(uint16_t lane) {
+    // phytimer trigger has to be 1
+    axiq_fifo_rx_enable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index);
+    const uint32_t dma_mask = (1 << adc[lane].dma_channel);
+    axiq_fifo_rx_disable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index); // falling edge enters flush mode
+
+    dmac_abort(dma_mask);
+    WAIT_TIMEOUT(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
+
+    axiq_fifo_rx_enable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index);
+
+    // ptr_rst needs to be done while AXIQ is enabled, otherwise it generates ~10000 samples of extra garbage, offsetting the real
+    // samples.
+    stream_read_ptr_rst(lane); // exits flush mode
+
+    WAIT_TIMEOUT(!dmac_is_enabled(dma_mask), VSPA_DEFAULT_TIMEOUT);
+
+    dmac_clear_complete(dma_mask);
+    dmac_clear_event(dma_mask);
+
+    // phytimer trigger can be set to 0
+}
+
+static void rx_ddr_dma_flush(uint16_t lane) {
+    const uint32_t dma_mask = (1 << rxddr[lane].dma_channel);
+    dmac_abort(dma_mask);
+    WAIT_TIMEOUT(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
+    dmac_clear_complete(dma_mask);
+    dmac_clear_event(dma_mask);
+}
+
+static inline void rx_adc_pipe_reset(adc_pipeline_t *adc, cfixed16_t *buffer) {
     adc->base_buffer = buffer;
-    adc->next_completion_buffer = adc->base_buffer;
+    adc->next_completion_buffer = buffer;
     adc->completion_count = 0;
 
     // reset dma
@@ -66,29 +108,31 @@ static inline void rx_adc_reset(adc_pipeline_t *adc, cfixed16_t *buffer) {
     dmac_clear_complete(dma_mask);
     dmac_clear_event(dma_mask);
     dmac_clear_errxfr(dma_mask);
+    dmac_clear_errcfg(dma_mask);
 }
 
-static inline void rx_ddr_reset(rx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
+static inline void rx_ddr_pipe_reset(rx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
     ddr->base_buffer = buffer;
-    ddr->write_head = ddr->base_buffer;
+    ddr->write_head = buffer;
     ddr->count_enque = 0;
     ddr->buf_filled = 0;
-    // tcd_fifo_reset(&ddr->tcd_fifo);
+    tcd_fifo_reset(&ddr->tcd_fifo);
     const uint16_t dma_mask = (1 << ddr->dma_channel);
     dmac_clear_complete(dma_mask);
     dmac_clear_event(dma_mask);
     dmac_clear_errxfr(dma_mask);
+    dmac_clear_errcfg(dma_mask);
 }
 
 void rx_setup_channel(uint16_t lane, e_rx_channel channel, uint16_t oversample_pow2) {
     adc[lane].axi_fifo_addr = RO0_AXI_FIFO_ADDR + (channel * 0x1000) + addr_beat_offset;
     adc[lane].axi_fifo_index = (enum axiq_fifo_e)(AXIQ_FIFO_RX0 + channel);
     adc[lane].dma_channel = RO0_ADC_RD_DMA_CHANNEL + channel;
-    rx_adc_reset(&adc[lane], adc_buffer[lane]);
+    rx_adc_pipe_reset(&adc[lane], adc_buffer[lane]);
 
     rxddr[lane].dma_channel = DDR_WR_DMA_CHANNEL_1 + lane;
     rxddr[lane].decimate_pow2 = oversample_pow2;
-    rx_ddr_reset(&rxddr[lane], ddr_write_buffer[lane]);
+    rx_ddr_pipe_reset(&rxddr[lane], ddr_write_buffer[lane]);
 
     rx_generator[lane].amplitude = 0.9;
     rx_generator[lane].phase = 0;
@@ -102,12 +146,13 @@ void rx_setup_channel(uint16_t lane, e_rx_channel channel, uint16_t oversample_p
 }
 
 // Prime ADC AXIQ and DMA engine, the actual start is triggered by phytimer
-static inline void adc_prime(uint16_t lane) {
-    const dma_mask = 1 << adc[lane].dma_channel;
-    if (dmac_is_enabled(dma_mask)) {
-        // nothing should be scheduled at this point, something did not cleanup before.
-        return;
-    }
+static inline void initial_adc_enq(uint16_t lane) {
+    // clear errors, enable axiq
+    axiq_fifo_rx_enable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index);
+    axiq_fifo_rx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
+    axiq_fifo_rx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index, AXIQ_CR_CLRERR, 0);
+
+    const uint16_t dma_mask = 1 << adc[lane].dma_channel;
 
     // enque two reads
     const uint32_t dma_ctrl = adc[lane].dma_channel | DMAC_FIFO | DMAC_RDC | DMAC_TRIG_VCPU;
@@ -115,11 +160,6 @@ static inline void adc_prime(uint16_t lane) {
     dmac_enable_v_c(dma_ctrl, adc_buffer[lane]);
     dmac_enable_v_c(dma_ctrl, &adc_buffer[lane][ADC_XFER_SAMPLE_COUNT]);
     stats.adc_enq += 2;
-
-    // clear errors, enable axiq
-    axiq_fifo_rx_enable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index);
-    axiq_fifo_rx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-    axiq_fifo_rx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index, AXIQ_CR_CLRERR, 0);
 }
 
 inline static void rx_lane_try_ddr_enqueue(uint16_t lane) {
@@ -148,6 +188,7 @@ inline static void rx_lane_try_ddr_enqueue(uint16_t lane) {
 
     if (tcd->size == 0) {
         tcd_fifo_pop(&rxddr[lane].tcd_fifo);
+        ++rxddr[lane].rx_host_if.tcd_done_counter;
         vspa_to_host_signal(rxddr[lane].rx_host_if.vth_tcd_done_flag_mask); // ask M4 to provide more TCD
         dma_ctrl |= DMAC_TRIG_IRQ; // signal M4 when data is actually available
     }
@@ -160,17 +201,15 @@ inline static void rx_lane_try_ddr_enqueue(uint16_t lane) {
     TRACE_DURATION(T_DDR_WR, DEFAULT_THREAD_ID, t1);
 }
 
-static inline void decimate(uint16_t lane, cfixed16_t *dest, cfixed16_t *src, uint16_t src_count) {
-    return;
+static inline void decimate(uint16_t lane, cfixed16_t *restrict dest, volatile cfixed16_t *restrict src, uint16_t src_count) {
     TRACE_START_DURATION(t1);
     switch (rxddr[lane].decimate_pow2) {
+    default:
     case 1:
-        decimator_2x_8_Taps_asm(dest, src, (float *)rx_filter_taps_downsampling, decimation_history[lane], src_count);
+        decimator_2x_8_Taps_asm(dest, src, rx_filter_taps_downsampling, decimation_history[lane], src_count);
         break;
     case 2:
-        decimator_4x_8_Taps_asm(dest, src, (float *)rx_filter_taps_downsampling, decimation_history[lane], src_count);
-        break;
-    default:
+        decimator_4x_8_Taps_asm(dest, src, rx_filter_taps_downsampling, decimation_history[lane], src_count);
         break;
     }
     TRACE_DURATION(T_DEC_BUFFER, 1, t1);
@@ -179,38 +218,46 @@ static inline void decimate(uint16_t lane, cfixed16_t *dest, cfixed16_t *src, ui
 void adc_dma_complete(uint16_t lane) {
     TRACE_START_DURATION(t1);
     TRACE_DMA_END(adc[lane].dma_channel, adc[lane].next_completion_buffer);
+    cfixed16_t *const completed_buffer = adc[lane].next_completion_buffer;
 
     const uint16_t dma_mask = (1 << adc[lane].dma_channel);
     dmac_clear_complete(dma_mask);
     dmac_clear_event(dma_mask);
 
-    cfixed16_t *src = adc[lane].next_completion_buffer;
+    ++stats.adc_compl;
+    ++adc[lane].completion_count;
+
+    // cfixed16_t *src = adc[lane].next_completion_buffer;
     cfixed16_t *dest = rxddr[lane].write_head + rxddr[lane].buf_filled;
 
     // work
-    {
+    const uint16_t input_count = ADC_XFER_SAMPLE_COUNT;
+    if (rxddr[lane].decimate_pow2) {
+        TRACE_START_DURATION(t2);
+        // in place processing
+        rx_qec_correction(completed_buffer, completed_buffer, ADC_XFER_SAMPLE_COUNT);
+        TRACE_DURATION(T_QEC_RX_BUFFER, DEFAULT_THREAD_ID, t2);
+        decimate(lane, dest, completed_buffer, ADC_XFER_SAMPLE_COUNT);
+    } else {
         TRACE_START_DURATION(t2);
         // in place processing
         // rx_qec_correction(adc[lane].next_completion_buffer, adc[lane].next_completion_buffer, ADC_XFER_SAMPLE_COUNT);
         // gen_nco_single_tone(rxddr[lane].write_head, ADC_XFER_SAMPLE_COUNT, &rx_generator[lane]);
         // gen_nco_single_tone(ddr_write_buffer[lane], 2*ADC_XFER_SAMPLE_COUNT, &rx_generator[lane]);
-        rx_qec_correction(dest, src, ADC_XFER_SAMPLE_COUNT);
+
+        // process into ddr buffer
+        rx_qec_correction(dest, completed_buffer, ADC_XFER_SAMPLE_COUNT);
         TRACE_DURATION(T_QEC_RX_BUFFER, DEFAULT_THREAD_ID, t2);
     }
 
-    const uint16_t input_count = ADC_XFER_SAMPLE_COUNT;
-
-    if (rxddr[lane].decimate_pow2)
-        decimate(lane, dest, src, ADC_XFER_SAMPLE_COUNT);
-
-    rxddr[lane].buf_filled += (ADC_XFER_SAMPLE_COUNT >> rxddr[lane].decimate_pow2);
+    rxddr[lane].buf_filled += (input_count >> rxddr[lane].decimate_pow2);
 
     // ADC self perpetuating, reenque new tranfer on each completion
     if (dmac_is_available(dma_mask)) {
         dmac_enable(adc[lane].dma_channel | DMAC_RDC | DMAC_FIFO | DMAC_TRIG_VCPU, // flags
                     ADC_XFER_SIZE_BYTES, // size
                     adc[lane].axi_fifo_addr, // axi addr
-                    VCPU_ADDR_FOR_DMA(adc[lane].next_completion_buffer) // dmem addr
+                    VCPU_ADDR_FOR_DMA(completed_buffer) // dmem addr
         );
         stats.adc_enq++;
     } else
@@ -221,8 +268,6 @@ void adc_dma_complete(uint16_t lane) {
         rxddr[lane].buf_filled = 0;
     }
 
-    ++stats.adc_compl;
-    ++adc[lane].completion_count;
     adc[lane].next_completion_buffer = adc[lane].base_buffer + (adc[lane].completion_count & 0x1) * ADC_XFER_SAMPLE_COUNT;
 
     TRACE_DURATION(T_ADC_COMPLETE, DEFAULT_THREAD_ID, t1);
@@ -233,33 +278,27 @@ void ddr_dma_complete(uint16_t lane) {
     // TRACE_DMA_END(rxddr[lane].dma_channel, adc[lane].next_completion_buffer);
     const uint32_t dma_mask = (1 << rxddr[lane].dma_channel);
     dmac_clear_complete(dma_mask);
-    // dmac_clear_event(dma_mask); // go event not used for ddr
+    dmac_clear_event(dma_mask); // go event not used for ddr
 
     ++stats.ddr_compl;
-    ++rxddr[lane].rx_host_if.tcd_done_counter;
-
     TRACE_DURATION(T_DDR_WR_COMPLETE, DEFAULT_THREAD_ID, t1);
 }
 
 void receiver_init(void) {
     for (int i = 0; i < RX_MAX_LANE_COUNT; ++i)
-        rx_setup_channel(i, VSPA_RX0 + i, 0);
+        rx_setup_channel(0, VSPA_RX0 + i, 0);
 }
 
 void rx_lane_prime(uint16_t lane) {
-    rx_adc_reset(&adc[lane], adc_buffer[lane]);
-    rx_ddr_reset(&rxddr[lane], ddr_write_buffer[lane]);
+    rx_axiq_fifo_reset(lane); // Doing a reset produces ~10000 samples of garbage
+    rx_adc_pipe_reset(&adc[lane], adc_buffer[lane]);
+
+    tcd_fifo_reset(&rxddr[lane].tcd_fifo);
+    rx_ddr_dma_flush(lane);
+    rx_ddr_pipe_reset(&rxddr[lane], ddr_write_buffer[lane]);
 
     memclr(&stats, sizeof(stats));
-    adc_prime(lane);
-}
-
-// PTR_RST must be done after:
-// dma_allowed falling edge
-static void stream_read_ptr_rst(uint16_t lane) {
-    // const uint32_t ctrl = DMAC_PEND_EXT | DMAC_FIFO_RESET | DMAC_RDC | adc[lane].dma_channel;
-    const uint32_t ctrl = DMAC_FIFO_RESET | DMAC_RDC | adc[lane].dma_channel;
-    dmac_enable(ctrl, 128, adc[lane].axi_fifo_addr, VCPU_ADDR_FOR_DMA(adc_buffer[lane]));
+    initial_adc_enq(lane);
 }
 
 void rx_lane_stop(uint16_t lane) {
@@ -270,12 +309,12 @@ void rx_lane_stop(uint16_t lane) {
     axiq_fifo_rx_disable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index); // enter DMA flush mode
 
     tcd_fifo_reset(&rxddr[lane].tcd_fifo);
-    while (!dmac_is_available(1 << adc[lane].dma_channel)) {
-    }
-    stream_read_ptr_rst(lane); // exits flush mode, tx_dma_allowed trigger must be still enabled at this point
-    while (dmac_is_running(1 << adc[lane].dma_channel)) // wait for abort to complete
-    {
-    }
+    WAIT_TIMEOUT(dmac_is_available(1 << adc[lane].dma_channel), VSPA_DEFAULT_TIMEOUT);
+
+    stream_read_ptr_rst(lane); // exits flush mode, rx_dma_allowed trigger must be still enabled at this point
+
+    WAIT_TIMEOUT(!dmac_is_enabled(dma_mask), VSPA_DEFAULT_TIMEOUT);
+
     dmac_clear_complete(dma_mask);
     dmac_clear_event(dma_mask);
 }

@@ -21,7 +21,6 @@ enum HTV_Signal {
     HTV_SIGNAL_TXLANE0_PRIME = (1 << 13),
     HTV_SIGNAL_TXLANE0_TCD_PENDING = (1 << 14),
     HTV_SIGNAL_TXLANE0_ABORT = (1 << 15),
-    HTV_SIGNAL_TXLANE0_UNBRICK = (1 << 16),
 };
 
 enum VTH_Signal {
