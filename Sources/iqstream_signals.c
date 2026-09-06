@@ -16,10 +16,9 @@ void HandleCommandFlags(void) {
         if (flags & (HTV_SIGNAL_RXLANE0_PRIME << lane))
             rx_lane_prime(0);
 
-        if (flags & rxddr[lane].rx_host_if.htv_pending_flag_mask) {
-            flags &= ~(rxddr[lane].rx_host_if.htv_pending_flag_mask);
-            if (rx_insert_tcd(lane, &rxddr[lane].rx_host_if.input_tcd))
-                clear_htv_signal(rxddr[lane].rx_host_if.htv_pending_flag_mask);
+        if (flags & rxddr[lane].dma.htv_tcd_pending_flag_mask) {
+            flags &= ~(rxddr[lane].dma.htv_tcd_pending_flag_mask);
+            clear_htv_signal(rxddr[lane].dma.htv_tcd_pending_flag_mask);
         }
     }
     for (int lane = 0; lane < TX_MAX_LANE_COUNT; ++lane) {
@@ -28,10 +27,14 @@ void HandleCommandFlags(void) {
         if (flags & (HTV_SIGNAL_TXLANE0_PRIME << lane))
             tx_lane_prime(0);
 
-        if (flags & txddr[lane].dma_hif.htv_pending_flag_mask) {
-            flags &= ~(txddr[lane].dma_hif.htv_pending_flag_mask);
-            if (tx_insert_tcd(lane, &txddr[lane].dma_hif.input_tcd))
-                clear_htv_signal(txddr[lane].dma_hif.htv_pending_flag_mask);
+        if (flags & txddr[lane].dma_hif.htv_tcd_pending_flag_mask) {
+            flags &= ~(txddr[lane].dma_hif.htv_tcd_pending_flag_mask);
+
+            tx_lane_try_ddr_enqueue(&txddr[lane]);
+            if (!tcd_fifo_isempty(&txddr[lane].dma_hif.tcd_table))
+                tx_lane_try_ddr_enqueue(&txddr[lane]);
+
+            clear_htv_signal(txddr[lane].dma_hif.htv_tcd_pending_flag_mask);
         }
     }
 

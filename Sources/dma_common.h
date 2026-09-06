@@ -55,6 +55,7 @@
 #define VCPU_ADDR_FOR_DMA(x) (((uint32_t)x) << 1)
 
 uint32_t dma_chan_mask(uint32_t dma_channel, uint8_t nb_dma);
+void dma_clear_all_bits(uint32_t mask);
 
 static bool did_timeout = false;
 

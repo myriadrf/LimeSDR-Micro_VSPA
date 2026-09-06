@@ -11,3 +11,10 @@ void wait_for_dma(uint32_t dma_mask) {
     } while (dmac_is_complete(dma_mask) != dma_mask && dmac_is_running(dma_mask));
     dmac_clear_complete(dma_mask);
 }
+
+void dma_clear_all_bits(uint32_t mask) {
+    dmac_clear_complete(mask);
+    dmac_clear_event(mask);
+    dmac_clear_errxfr(mask);
+    dmac_clear_errcfg(mask);
+}

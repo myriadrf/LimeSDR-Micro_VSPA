@@ -131,6 +131,12 @@ uint64_t HandleCommand(uint64_t msg64) {
     const uint32_t fifo_addr = msg_lsb;
 
     switch (op_code) {
+    case MBOX_OPC_RX_CHAN_SELECT: {
+        const uint8_t lane = msg_lsb & 0xFF;
+        const uint8_t channel = (msg_lsb >> 8) & 0xFF;
+        return (MAKEDWORD(0, rx_select_channel(lane, (e_rx_channel)channel)));
+        break;
+    }
     case MBOX_OPC_SINGLE_TONE_TX:
         // TxTone_control(msg64);
         return (MAKEDWORD(0, 0x1));

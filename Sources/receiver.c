@@ -15,6 +15,8 @@
 #include "axiq-la9310.h"
 #include "vcpu.h"
 
+#include "opstatus.h"
+
 #define DMEM_ALIGNMENT_ATTR aligned(64)
 
 #define RO0_AXI_FIFO_ADDR 0x44001000
@@ -55,149 +57,161 @@ extern void decimator_4x_8_Taps_asm(cfixed16_t *pOut, volatile cfixed16_t *pIn, 
 
 tone_state_t rx_generator[RX_MAX_LANE_COUNT];
 
-struct DebugStats stats;
+struct PipeStats rx_stats[RX_MAX_LANE_COUNT];
 
 rx_ddr_pipeline_t rxddr[RX_MAX_LANE_COUNT];
 adc_pipeline_t adc[RX_MAX_LANE_COUNT];
 
-// PTR_RST must be done after:
-// dma_allowed falling edge
+static inline void check_adc_axi_status(uint16_t lane) {
+    const enum axiq_fifo_e fifo_index = (enum axiq_fifo_e)adc[lane].axi_fifo_index;
+    const uint8_t field_shift = axiq_sr_shift(fifo_index);
+
+    // Check AXIQ rx fifo is not full or overrun
+    uint32_t status = axiq_fifo_rx_sr(AXIQ_BANK_0, fifo_index, AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER);
+    if (status == 0)
+        return;
+
+    status >>= field_shift;
+    if (status & AXIQ_SR_FIELD_ERROVER) {
+        ++rx_stats[lane].afe_ovr;
+    }
+    if (status & AXIQ_SR_FIELD_ERRUNDER) {
+        ++rx_stats[lane].afe_udr;
+    }
+    axiq_fifo_rx_cr(AXIQ_BANK_0, fifo_index, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
+    axiq_fifo_rx_cr(AXIQ_BANK_0, fifo_index, AXIQ_CR_CLRERR, 0);
+}
+
+// PTR_RST must be done for each dma_allowed falling edge
 static inline void stream_read_ptr_rst(uint16_t lane) {
     const uint32_t ctrl = DMAC_FIFO_RESET | DMAC_RDC | adc[lane].dma_channel;
-    dmac_enable(ctrl, 128, adc[lane].axi_fifo_addr, VCPU_ADDR_FOR_DMA(adc_buffer[lane]));
+    dmac_enable(ctrl, 16, adc[lane].axi_fifo_addr, VCPU_ADDR_FOR_DMA(adc_buffer[lane]));
 }
 
 static void rx_axiq_fifo_reset(uint16_t lane) {
-    // phytimer trigger has to be 1
     axiq_fifo_rx_enable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index);
     const uint32_t dma_mask = (1 << adc[lane].dma_channel);
-    axiq_fifo_rx_disable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index); // falling edge enters flush mode
-
     dmac_abort(dma_mask);
-    WAIT_TIMEOUT(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
 
-    axiq_fifo_rx_enable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index);
-
-    // ptr_rst needs to be done while AXIQ is enabled, otherwise it generates ~10000 samples of extra garbage, offsetting the real
-    // samples.
+    axiq_fifo_rx_disable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index); // falling edge enters flush mode
+    WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
     stream_read_ptr_rst(lane); // exits flush mode
 
-    WAIT_TIMEOUT(!dmac_is_enabled(dma_mask), VSPA_DEFAULT_TIMEOUT);
-
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
-
-    // phytimer trigger can be set to 0
-}
-
-static void rx_ddr_dma_flush(uint16_t lane) {
-    const uint32_t dma_mask = (1 << rxddr[lane].dma_channel);
-    dmac_abort(dma_mask);
-    WAIT_TIMEOUT(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
+    WAIT_FOR(!dmac_is_enabled(dma_mask), VSPA_DEFAULT_TIMEOUT);
+    dma_clear_all_bits(dma_mask);
 }
 
 static inline void rx_adc_pipe_reset(adc_pipeline_t *adc, cfixed16_t *buffer) {
     adc->base_buffer = buffer;
     adc->next_completion_buffer = buffer;
-    adc->completion_count = 0;
+    adc->count_dmac_complete = 0;
 
     // reset dma
-    const uint16_t dma_mask = (1 << adc->dma_channel);
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
-    dmac_clear_errxfr(dma_mask);
-    dmac_clear_errcfg(dma_mask);
+    dma_clear_all_bits(1 << adc->dma_channel);
 }
 
 static inline void rx_ddr_pipe_reset(rx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
     ddr->base_buffer = buffer;
     ddr->write_head = buffer;
-    ddr->count_enque = 0;
+    ddr->count_dmac_enque = 0;
+    ddr->count_dmac_complete = 0;
     ddr->buf_filled = 0;
-    tcd_fifo_reset(&ddr->tcd_fifo);
-    const uint16_t dma_mask = (1 << ddr->dma_channel);
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
-    dmac_clear_errxfr(dma_mask);
-    dmac_clear_errcfg(dma_mask);
+    tcd_fifo_reset(&ddr->dma.tcd_table);
+    memclr(ddr->meta, sizeof(ddr->meta));
+
+    const uint32_t dma_mask = (1 << ddr->dma_channel);
+    dmac_abort(dma_mask);
+    WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
+    dma_clear_all_bits(dma_mask);
 }
 
-void rx_setup_channel(uint16_t lane, e_rx_channel channel, uint16_t oversample_pow2) {
+int rx_select_channel(uint16_t lane, e_rx_channel channel) {
+    if (lane > RX_MAX_LANE_COUNT)
+        return lime_Result_InvalidValue;
     adc[lane].axi_fifo_addr = RO0_AXI_FIFO_ADDR + (channel * 0x1000) + addr_beat_offset;
     adc[lane].axi_fifo_index = (enum axiq_fifo_e)(AXIQ_FIFO_RX0 + channel);
     adc[lane].dma_channel = RO0_ADC_RD_DMA_CHANNEL + channel;
     rx_adc_pipe_reset(&adc[lane], adc_buffer[lane]);
 
     rxddr[lane].dma_channel = DDR_WR_DMA_CHANNEL_1 + lane;
-    rxddr[lane].decimate_pow2 = oversample_pow2;
     rx_ddr_pipe_reset(&rxddr[lane], ddr_write_buffer[lane]);
 
     rx_generator[lane].amplitude = 0.9;
     rx_generator[lane].phase = 0;
     rx_generator[lane].freq_bin = 8192;
 
-    rxddr[lane].rx_host_if.tcd_done_counter = 0;
-    rxddr[lane].rx_host_if.htv_pending_flag_mask = (HTV_SIGNAL_RXLANE0_TCD_PENDING << lane);
-    rxddr[lane].rx_host_if.vth_tcd_done_flag_mask = (VTH_SIGNAL_RXLANE0_TCD_DONE << lane);
+    rxddr[lane].dma.htv_tcd_pending_flag_mask = (HTV_SIGNAL_RXLANE0_TCD_PENDING << lane);
+    rxddr[lane].dma.vth_tcd_done_flag_mask = (VTH_SIGNAL_RXLANE0_TCD_DONE << lane);
 
-    clear_htv_signal(rxddr[lane].rx_host_if.htv_pending_flag_mask);
+    clear_htv_signal(rxddr[lane].dma.htv_tcd_pending_flag_mask);
+    return lime_Result_Success;
+}
+
+int rx_set_oversampling(uint16_t lane, uint16_t decimate_pow2) {
+    if (lane > RX_MAX_LANE_COUNT)
+        return lime_Result_InvalidValue;
+
+    rxddr[lane].decimate_pow2 = decimate_pow2;
+    return lime_Result_Success;
 }
 
 // Prime ADC AXIQ and DMA engine, the actual start is triggered by phytimer
 static inline void initial_adc_enq(uint16_t lane) {
-    // clear errors, enable axiq
+    const uint16_t dma_mask = 1 << adc[lane].dma_channel;
+
+    WAIT_FOR(!dmac_is_running(1 << adc[lane].dma_channel), VSPA_DEFAULT_TIMEOUT);
     axiq_fifo_rx_enable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index);
+    // Enabling Rx AXIQ instantly generates underrun error, clear it.
     axiq_fifo_rx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
     axiq_fifo_rx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index, AXIQ_CR_CLRERR, 0);
-
-    const uint16_t dma_mask = 1 << adc[lane].dma_channel;
 
     // enque two reads
     const uint32_t dma_ctrl = adc[lane].dma_channel | DMAC_FIFO | DMAC_RDC | DMAC_TRIG_VCPU;
     dmac_prep_a_s(ADC_XFER_SIZE_BYTES, adc[lane].axi_fifo_addr);
-    dmac_enable_v_c(dma_ctrl, adc_buffer[lane]);
-    dmac_enable_v_c(dma_ctrl, &adc_buffer[lane][ADC_XFER_SAMPLE_COUNT]);
-    stats.adc_enq += 2;
+    dmac_enable_v_c(dma_ctrl, VCPU_ADDR_FOR_DMA(adc_buffer[lane]));
+    dmac_enable_v_c(dma_ctrl, VCPU_ADDR_FOR_DMA(&adc_buffer[lane][ADC_XFER_SAMPLE_COUNT]));
+    rx_stats[lane].afe_enq += 2;
 }
 
 inline static void rx_lane_try_ddr_enqueue(uint16_t lane) {
     TRACE_START_DURATION(t1);
-    if (!dmac_is_available(1 << rxddr[lane].dma_channel)) {
-        stats.ddr_err++;
+    rx_ddr_pipeline_t *const ddr = &rxddr[lane];
+    if (!dmac_is_available(1 << ddr->dma_channel)) {
+        ++rx_stats[lane].dfe_ovr;
         return;
     }
 
-    if (tcd_fifo_isempty(&rxddr[lane].tcd_fifo)) {
-        stats.ddr_ovr++;
+    if (tcd_fifo_isempty(&ddr->dma.tcd_table)) {
+        ++rx_stats[lane].dfe_udr;
         return;
     }
 
-    vspa_dma_tcd_t *tcd = tcd_fifo_front(&rxddr[lane].tcd_fifo);
+    rx_meta_t *const meta = &ddr->meta[ddr->count_dmac_enque & 0x1];
+    meta->flags = 0;
+
+    volatile dma_tcd_t *const tcd = tcd_fifo_front(&ddr->dma.tcd_table);
     const uint32_t xfer_size = tcd->size > DDR_XFER_SIZE_BYTES ? DDR_XFER_SIZE_BYTES : tcd->size;
 
-    iowr(DMA_DMEM_PRAM_ADDR, VCPU_ADDR_FOR_DMA(rxddr[lane].write_head));
-    iowr(DMA_AXI_ADDRESS, tcd->addr);
+    iowr(DMA_DMEM_PRAM_ADDR, VCPU_ADDR_FOR_DMA(ddr->write_head));
+    iowr(DMA_AXI_ADDRESS, tcd->la9310_mem_address);
     iowr(DMA_AXI_BYTE_CNT, xfer_size);
 
-    tcd->addr += xfer_size;
+    tcd->la9310_mem_address += xfer_size;
     tcd->size -= xfer_size;
 
-    uint32_t dma_ctrl = DMAC_WRC | rxddr[lane].dma_channel; // no need DMAC_TRIG_VCPU, VCPU will be triggered by ADC transfer
-
+    // DDR writes complete faster than ADC reads, so no need for DMAC_TRIG_VCPU
+    // VCPU will be triggered only by ADC transfers to maintain consistent pacing
+    uint32_t dma_ctrl = DMAC_WRC | ddr->dma_channel;
     if (tcd->size == 0) {
-        tcd_fifo_pop(&rxddr[lane].tcd_fifo);
-        ++rxddr[lane].rx_host_if.tcd_done_counter;
-        vspa_to_host_signal(rxddr[lane].rx_host_if.vth_tcd_done_flag_mask); // ask M4 to provide more TCD
-        dma_ctrl |= DMAC_TRIG_IRQ; // signal M4 when data is actually available
+        meta->flags |= PKT_DMA_TCD_END;
+        tcd_fifo_pop(&ddr->dma.tcd_table);
     }
 
     iowr(DMA_XFR_CTRL, dma_ctrl);
-    // TRACE_DMA_BEGIN(rxddr[lane].dma_channel, rxddr[lane].write_head);
-    ++stats.ddr_enq;
-    ++rxddr[lane].count_enque;
-    rxddr[lane].write_head = rxddr[lane].base_buffer + (rxddr[lane].count_enque & 0x1) * DDR_XFER_SAMPLE_COUNT;
+    // TRACE_DMA_BEGIN(ddr->dma_channel, ddr->write_head);
+    ++rx_stats[lane].dfe_enq;
+    ++ddr->count_dmac_enque;
+    ddr->write_head = ddr->base_buffer + (ddr->count_dmac_enque & 0x1) * DDR_XFER_SAMPLE_COUNT;
     TRACE_DURATION(T_DDR_WR, DEFAULT_THREAD_ID, t1);
 }
 
@@ -220,19 +234,20 @@ void adc_dma_complete(uint16_t lane) {
     TRACE_DMA_END(adc[lane].dma_channel, adc[lane].next_completion_buffer);
     cfixed16_t *const completed_buffer = adc[lane].next_completion_buffer;
 
+    check_adc_axi_status(lane);
+
     const uint16_t dma_mask = (1 << adc[lane].dma_channel);
     dmac_clear_complete(dma_mask);
     dmac_clear_event(dma_mask);
 
-    ++stats.adc_compl;
-    ++adc[lane].completion_count;
+    ++rx_stats[lane].afe_compl;
 
-    // cfixed16_t *src = adc[lane].next_completion_buffer;
-    cfixed16_t *dest = rxddr[lane].write_head + rxddr[lane].buf_filled;
+    rx_ddr_pipeline_t *const ddr = &rxddr[lane];
+    cfixed16_t *const dest = ddr->write_head + ddr->buf_filled;
 
     // work
     const uint16_t input_count = ADC_XFER_SAMPLE_COUNT;
-    if (rxddr[lane].decimate_pow2) {
+    if (ddr->decimate_pow2) {
         TRACE_START_DURATION(t2);
         // in place processing
         rx_qec_correction(completed_buffer, completed_buffer, ADC_XFER_SAMPLE_COUNT);
@@ -250,7 +265,7 @@ void adc_dma_complete(uint16_t lane) {
         TRACE_DURATION(T_QEC_RX_BUFFER, DEFAULT_THREAD_ID, t2);
     }
 
-    rxddr[lane].buf_filled += (input_count >> rxddr[lane].decimate_pow2);
+    ddr->buf_filled += (input_count >> ddr->decimate_pow2);
 
     // ADC self perpetuating, reenque new tranfer on each completion
     if (dmac_is_available(dma_mask)) {
@@ -259,16 +274,17 @@ void adc_dma_complete(uint16_t lane) {
                     adc[lane].axi_fifo_addr, // axi addr
                     VCPU_ADDR_FOR_DMA(completed_buffer) // dmem addr
         );
-        stats.adc_enq++;
+        ++rx_stats[lane].afe_enq;
     } else
-        stats.adc_err++;
+        ++rx_stats[lane].afe_ovr;
 
-    if (rxddr[lane].buf_filled >= DDR_XFER_SAMPLE_COUNT) {
+    if (ddr->buf_filled >= DDR_XFER_SAMPLE_COUNT) {
         rx_lane_try_ddr_enqueue(lane);
-        rxddr[lane].buf_filled = 0;
+        ddr->buf_filled = 0;
     }
 
-    adc[lane].next_completion_buffer = adc[lane].base_buffer + (adc[lane].completion_count & 0x1) * ADC_XFER_SAMPLE_COUNT;
+    ++adc[lane].count_dmac_complete;
+    adc[lane].next_completion_buffer = adc[lane].base_buffer + (adc[lane].count_dmac_complete & 0x1) * ADC_XFER_SAMPLE_COUNT;
 
     TRACE_DURATION(T_ADC_COMPLETE, DEFAULT_THREAD_ID, t1);
 }
@@ -276,57 +292,46 @@ void adc_dma_complete(uint16_t lane) {
 void ddr_dma_complete(uint16_t lane) {
     TRACE_START_DURATION(t1);
     // TRACE_DMA_END(rxddr[lane].dma_channel, adc[lane].next_completion_buffer);
-    const uint32_t dma_mask = (1 << rxddr[lane].dma_channel);
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask); // go event not used for ddr
+    rx_ddr_pipeline_t *const ddr = &rxddr[lane];
+    const rx_meta_t *const meta = &ddr->meta[ddr->count_dmac_complete & 0x1];
 
-    ++stats.ddr_compl;
+    ++rx_stats[lane].dfe_compl;
+    ++ddr->count_dmac_complete;
+    dmac_clear_complete(1 << ddr->dma_channel);
+    // dmac_clear_event(1 << ddr->dma_channel); // go event not used for ddr
+
+    if (meta->flags & PKT_DMA_TCD_END) {
+        ++ddr->dma.tcd_table.done;
+        vspa_to_host_signal(ddr->dma.vth_tcd_done_flag_mask);
+    }
+
     TRACE_DURATION(T_DDR_WR_COMPLETE, DEFAULT_THREAD_ID, t1);
 }
 
 void receiver_init(void) {
-    for (int i = 0; i < RX_MAX_LANE_COUNT; ++i)
-        rx_setup_channel(0, VSPA_RX0 + i, 0);
+    for (int i = 0; i < RX_MAX_LANE_COUNT; ++i) {
+        rx_select_channel(i, (e_rx_channel)(VSPA_RX0 + i));
+        rx_set_oversampling(i, 0);
+    }
 }
 
 void rx_lane_prime(uint16_t lane) {
-    rx_axiq_fifo_reset(lane); // Doing a reset produces ~10000 samples of garbage
+    rx_axiq_fifo_reset(lane);
     rx_adc_pipe_reset(&adc[lane], adc_buffer[lane]);
-
-    tcd_fifo_reset(&rxddr[lane].tcd_fifo);
-    rx_ddr_dma_flush(lane);
     rx_ddr_pipe_reset(&rxddr[lane], ddr_write_buffer[lane]);
 
-    memclr(&stats, sizeof(stats));
+    memclr(&rx_stats[lane], sizeof(struct PipeStats));
     initial_adc_enq(lane);
 }
 
 void rx_lane_stop(uint16_t lane) {
-    // const uint32_t rx_dma_allowed = gpird(0, (1<< adc[lane].axi_fifo_index * 4)); // Phytimer trigger value
-
     const uint32_t dma_mask = (1 << rxddr[lane].dma_channel) | (1 << adc[lane].dma_channel);
     dmac_abort(dma_mask);
-    axiq_fifo_rx_disable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index); // enter DMA flush mode
-
-    tcd_fifo_reset(&rxddr[lane].tcd_fifo);
-    WAIT_TIMEOUT(dmac_is_available(1 << adc[lane].dma_channel), VSPA_DEFAULT_TIMEOUT);
-
-    stream_read_ptr_rst(lane); // exits flush mode, rx_dma_allowed trigger must be still enabled at this point
-
-    WAIT_TIMEOUT(!dmac_is_enabled(dma_mask), VSPA_DEFAULT_TIMEOUT);
+    // axiq_fifo_rx_disable(AXIQ_BANK_0, (enum axiq_fifo_e)adc[lane].axi_fifo_index); // enter DMA flush mode
+    // WAIT_FOR(dmac_is_available(1 << adc[lane].dma_channel), VSPA_DEFAULT_TIMEOUT);
+    // stream_read_ptr_rst(lane);
+    // WAIT_FOR(!dmac_is_enabled(dma_mask), VSPA_DEFAULT_TIMEOUT);
 
     dmac_clear_complete(dma_mask);
     dmac_clear_event(dma_mask);
-}
-
-bool rx_insert_tcd(uint16_t lane, const vspa_dma_tcd_t *tcd) {
-    if (tcd_fifo_isfull(&rxddr[lane].tcd_fifo))
-        return false;
-
-    // limit to external memory range
-    if (tcd->addr < 0xA0000000 || (tcd->addr + tcd->size) > 0xDFFFFFFF)
-        return false;
-
-    tcd_fifo_push(&rxddr[lane].tcd_fifo, *tcd);
-    return true;
 }
