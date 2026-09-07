@@ -43,7 +43,8 @@ typedef struct DAC_lane {
 extern tx_ddr_pipeline_t txddr[TX_MAX_LANE_COUNT];
 
 void transmitter_init(void);
-void tx_lane_setup(uint16_t lane, uint16_t channel, uint16_t oversamplePow2);
+void tx_lane_setup(uint16_t lane, uint16_t channel);
+int tx_set_oversampling(uint16_t lane, uint16_t oversample_pow2);
 
 void tx_lane_prime(uint16_t lane);
 void tx_lane_abort(uint16_t lane);

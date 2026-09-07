@@ -137,6 +137,18 @@ uint64_t HandleCommand(uint64_t msg64) {
         return (MAKEDWORD(0, rx_select_channel(lane, (e_rx_channel)channel)));
         break;
     }
+    case MBOX_OPC_RX_CONFIGURE: {
+        const uint8_t lane = msg_lsb & 0xFF;
+        const uint8_t ovr_pow2 = (msg_lsb >> 8) & 0xFF;
+        return (MAKEDWORD(0, rx_set_oversampling(lane, ovr_pow2)));
+        break;
+    }
+    case MBOX_OPC_TX_CONFIGURE: {
+        const uint8_t lane = msg_lsb & 0xFF;
+        const uint8_t ovr_pow2 = (msg_lsb >> 8) & 0xFF;
+        return (MAKEDWORD(0, tx_set_oversampling(lane, ovr_pow2)));
+        break;
+    }
     case MBOX_OPC_SINGLE_TONE_TX:
         // TxTone_control(msg64);
         return (MAKEDWORD(0, 0x1));
@@ -263,14 +275,19 @@ __attribute__((noreturn)) void main(void) {
         //     dma_done_callback[6]();
         // if (compl & (1<<5))
         //     dma_done_callback[5]();
-        if (dmac_event(1 << 4)) // RX1
-            adc_dma_complete(1);
-        if (dmac_event(1 << 3)) // RX0
-            adc_dma_complete(0);
-        if (dmac_event(1 << 2))
-            adc_dma_complete(1);
-        if (dmac_event(1 << 1))
-            adc_dma_complete(0);
+
+        for (int lane = 0; lane < RX_MAX_LANE_COUNT; ++lane) {
+            if (dmac_event(1 << adc[lane].dma_channel))
+                adc_dma_complete(lane);
+        }
+        // if (dmac_event(1 << 4)) // RX1
+        //     adc_dma_complete(1);
+        // if (dmac_event(1 << 3)) // RX0
+        //     adc_dma_complete(0);
+        // if (dmac_event(1 << 2))
+        //     adc_dma_complete(1);
+        // if (dmac_event(1 << 1))
+        //     adc_dma_complete(0);
         // if (compl & (1<<0))
         //     dma_done_callback[0]();
     }

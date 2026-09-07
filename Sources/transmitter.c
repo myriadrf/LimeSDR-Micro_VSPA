@@ -14,6 +14,7 @@
 #include "axiq-la9310.h"
 #include "vcpu.h"
 
+#include "opstatus.h"
 #include "vspa_iqstream.h"
 
 #define PHY_TMR_DMA_CHAN 0
@@ -133,7 +134,7 @@ static void tx_ddr_reset(tx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
 }
 
 // Configure pipline's persistent parameters
-void tx_lane_setup(uint16_t lane, uint16_t channel, uint16_t oversamplePow2) {
+void tx_lane_setup(uint16_t lane, uint16_t channel) {
     channel = 0; // TX has only 1 channel
     memclr(&tx_stats, sizeof(tx_stats));
     dac[lane].axi_fifo_addr = dac_axi_fifo_addr + (channel * 0x1000);
@@ -148,7 +149,6 @@ void tx_lane_setup(uint16_t lane, uint16_t channel, uint16_t oversamplePow2) {
     txddr[lane].dma_channel = DDR_RD_DMA_CHANNEL_1; // + lane;
     tx_ddr_reset(&txddr[lane], ddr_read_buffer[lane]);
 
-    int_ratio_pow2[lane] = oversamplePow2;
     memclr(int_history, sizeof(int_history));
 }
 
@@ -200,16 +200,17 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr) {
     TRACE_DURATION(T_DDR_WR, DEFAULT_THREAD_ID, t1);
 }
 
-static inline void consume_ddr(uint16_t lane, tx_ddr_pipeline_t *ddr, uint16_t samplesCount) {
+static inline bool consume_ddr(uint16_t lane, tx_ddr_pipeline_t *ddr, uint16_t samplesCount) {
     ddr->ready_buffer_offset += samplesCount;
     if (ddr->ready_buffer_offset < DDR_XFER_SAMPLE_COUNT)
-        return;
+        return false;
 
     --ddr->ready_buffer_count;
     ddr->ready_buffer_offset = 0;
 
     ++ddr->count_dmac_complete;
     ddr->ready_buffer = ddr->base_buffer + (ddr->count_dmac_complete & 0x1) * DDR_XFER_SAMPLE_COUNT;
+    return true;
 }
 
 inline static void dac_enque(dac_pipeline_t *dac, bool tx_burst_end) {
@@ -270,11 +271,11 @@ static inline void tx_pipeline_work(uint16_t lane) {
 
     tx_meta_t *const meta = &txddr[lane].meta[txddr[lane].count_dmac_complete & 0x1];
     // mark whole or part of available ddr data as consumed
-    consume_ddr(lane, &txddr[lane], src_count);
+    bool dac_end = consume_ddr(lane, &txddr[lane], src_count) && (meta->flags & PKT_END);
 
     check_dac_had_issues();
 
-    dac_enque(dac, meta->flags & PKT_END);
+    dac_enque(dac, dac_end);
 }
 
 void dac_dma_complete(uint16_t lane) {
@@ -334,7 +335,15 @@ void transmitter_init(void) {
         clear_htv_signal(dma_hif->htv_tcd_pending_flag_mask);
     }
 
-    tx_lane_setup(0, 0, 0);
+    tx_lane_setup(0, 0);
+}
+
+int tx_set_oversampling(uint16_t lane, uint16_t oversample_pow2) {
+    if (lane > TX_MAX_LANE_COUNT)
+        return lime_Result_InvalidValue;
+
+    int_ratio_pow2[lane] = oversample_pow2;
+    return lime_Result_Success;
 }
 
 static void inline tx_axiq_fifo_reset(uint16_t lane) {

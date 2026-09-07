@@ -45,6 +45,7 @@ typedef struct ADC_lane {
 #define RX_MAX_LANE_COUNT 1
 
 extern rx_ddr_pipeline_t rxddr[RX_MAX_LANE_COUNT];
+extern adc_pipeline_t adc[RX_MAX_LANE_COUNT];
 
 void receiver_init(void);
 int rx_select_channel(uint16_t lane, e_rx_channel channel);
