@@ -248,6 +248,8 @@ static inline void interpol(cfixed16_t *dest, cfixed16_t *src, cfixed16_t *histo
     }
 }
 
+static const float upscalefactor = 4.0f;
+
 static inline void tx_pipeline_work(uint16_t lane) {
     if (txddr[lane].ready_buffer_count == 0)
         return;
@@ -268,6 +270,7 @@ static inline void tx_pipeline_work(uint16_t lane) {
     } else {
         tx_qec_correction(dest, src, DAC_XFER_SAMPLE_COUNT);
     }
+    rhf_rhf_rsp_vMultiSclr_asm(dest, dest, &upscalefactor, DAC_XFER_SIZE_BYTES/DMEM_LINE_SIZE_BYTES);
 
     tx_meta_t *const meta = &txddr[lane].meta[txddr[lane].count_dmac_complete & 0x1];
     // mark whole or part of available ddr data as consumed

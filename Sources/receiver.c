@@ -229,6 +229,8 @@ static inline void decimate(uint16_t lane, cfixed16_t *restrict dest, volatile c
     TRACE_DURATION(T_DEC_BUFFER, 1, t1);
 }
 
+static const float downscalefactor = 0.25f;
+
 void adc_dma_complete(uint16_t lane) {
     TRACE_START_DURATION(t1);
     TRACE_DMA_END(adc[lane].dma_channel, adc[lane].next_completion_buffer);
@@ -246,6 +248,9 @@ void adc_dma_complete(uint16_t lane) {
     cfixed16_t *const dest = ddr->write_head + ddr->buf_filled;
 
     // work
+    // downscale into 12bit range
+    rhf_rhf_rsp_vMultiSclr_asm(completed_buffer, completed_buffer, &downscalefactor, ADC_XFER_SIZE_BYTES/DMEM_LINE_SIZE_BYTES);
+
     const uint16_t input_count = ADC_XFER_SAMPLE_COUNT;
     if (ddr->decimate_pow2) {
         TRACE_START_DURATION(t2);

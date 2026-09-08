@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+# Copyright 2014 - 2025   NXP Semiconductors
+
+// =============================================================================
+//! @file           vSclr_asm.sx
+//! @brief          Compute X + a (a-scalar, X-vector), or X * alpha
+//! @author         NXP Semiconductors
+// =============================================================================
+
+    .section .text
+
+// _VR  = # of halfwords of one  VRA register
+// _VRH = # of halfwords of half VRA register
+#define _VR     (__AU_COUNT__*4)
+#define _VRH    (__AU_COUNT__*2)
+
+
+// ================= y = x + alpha  ==================== //
+    .global _rhf_rhf_rhf_vAddSclr_asm
+    .type _rhf_rhf_rhf_vAddSclr_asm, @function
+    .size _rhf_rhf_rhf_vAddSclr_asm, _rhf_rhf_rhf_vAddSclr_asm_end - _rhf_rhf_rhf_vAddSclr_asm
+
+    .global _rhp_rhp_rhp_vAddSclr_asm
+    .type _rhp_rhp_rhp_vAddSclr_asm, @function
+    .size _rhp_rhp_rhp_vAddSclr_asm, _rhp_rhp_rhp_vAddSclr_asm_end - _rhp_rhp_rhp_vAddSclr_asm
+
+    .global _rsp_rsp_rsp_vAddSclr_asm
+    .type _rsp_rsp_rsp_vAddSclr_asm, @function
+    .size _rsp_rsp_rsp_vAddSclr_asm, _rsp_rsp_rsp_vAddSclr_asm_end - _rsp_rsp_rsp_vAddSclr_asm
+
+    .global _chf_chf_chf_vAddSclr_asm
+    .type _chf_chf_chf_vAddSclr_asm, @function
+    .size _chf_chf_chf_vAddSclr_asm, _chf_chf_chf_vAddSclr_asm_end - _chf_chf_chf_vAddSclr_asm
+
+    .global _chp_chp_chp_vAddSclr_asm
+    .type _chp_chp_chp_vAddSclr_asm, @function
+    .size _chp_chp_chp_vAddSclr_asm, _chp_chp_chp_vAddSclr_asm_end -_chp_chp_chp_vAddSclr_asm
+
+    .global _csp_csp_csp_vAddSclr_asm
+    .type _csp_csp_csp_vAddSclr_asm, @function
+    .size _csp_csp_csp_vAddSclr_asm, _csp_csp_csp_vAddSclr_asm_end -_csp_csp_csp_vAddSclr_asm
+
+// real
+_rhf_rhf_rhf_vAddSclr_asm:
+    jmp main_vSclr;
+    set.prec  half_fixed, half_fixed, half_fixed, single, half_fixed;
+    set.Smode S0hword, S1real1, S2straight;         // S0hword: populate S0 with a real scalar
+_rhp_rhp_rhp_vAddSclr_asm:
+    jmp main_vSclr;
+    set.prec  half, half, half, single, half;
+    set.Smode S0hword, S1real1, S2straight;
+_rsp_rsp_rsp_vAddSclr_asm:
+    jmp main_vSclr;
+    set.prec  single, single, single, single, single;
+    set.Smode S0hword, S1real1, S2straight;
+
+// complex
+_chf_chf_chf_vAddSclr_asm:
+    jmp main_vSclr;
+    set.prec  half_fixed, half_fixed, half_fixed, single, half_fixed;
+    set.Smode S0i1r1i1r1, S1real1, S2straight;      // S0i1r1i1r1: populate S0 with a complex scalar
+_chp_chp_chp_vAddSclr_asm:
+    jmp main_vSclr;
+    set.prec  half, half, half, single, half;
+    set.Smode S0i1r1i1r1, S1real1, S2straight;
+_csp_csp_csp_vAddSclr_asm:
+    jmp main_vSclr;
+    set.prec  single, single, single, single, single;
+    set.Smode S0i1r1i1r1, S1real1, S2straight;
+
+// ================= y = x * alpha  ==================== //
+    .global _rhf_rhf_rsp_vMultiSclr_asm
+    .type _rhf_rhf_rsp_vMultiSclr_asm, @function
+    .size _rhf_rhf_rsp_vMultiSclr_asm, _rhf_rhf_rsp_vMultiSclr_asm_end - _rhf_rhf_rsp_vMultiSclr_asm
+    .global _rhp_rhp_rsp_vMultiSclr_asm
+    .type _rhp_rhp_rsp_vMultiSclr_asm, @function
+    .size _rhp_rhp_rsp_vMultiSclr_asm, _rhp_rhp_rsp_vMultiSclr_asm_end - _rhp_rhp_rsp_vMultiSclr_asm
+    .global _rsp_rsp_rsp_vMultiSclr_asm
+    .type _rsp_rsp_rsp_vMultiSclr_asm, @function
+    .size _rsp_rsp_rsp_vMultiSclr_asm, _rsp_rsp_rsp_vMultiSclr_asm_end - _rsp_rsp_rsp_vMultiSclr_asm
+
+
+// real
+_rhf_rhf_rsp_vMultiSclr_asm:
+    jmp main_vSclr;
+    set.prec  single, half_fixed, half_fixed, single, half_fixed;
+    set.Smode S0hword, S1straight, S2zeros;         // S0hword: populate S0 with a real scalar
+_rhp_rhp_rsp_vMultiSclr_asm:
+    jmp main_vSclr;
+    set.prec  single, half, half_fixed, single, half;
+    set.Smode S0hword, S1straight, S2zeros;
+_rsp_rsp_rsp_vMultiSclr_asm:
+    jmp main_vSclr;
+    set.prec  single, single, half_fixed, single, single;
+    set.Smode S0hword, S1straight, S2zeros;
+
+
+
+// Shared loop body. Complex addition can be implemented with "rmad".
+// Shared loop body. Mulitply with real scalar can be implemented with "rmad".
+main_vSclr:
+    // a0 = y
+    // a1 = x
+    // a2 = alpha (the scalar)
+    ld.laddr [a2]+1;                    clr.VRA;
+    ld.laddr [a2]+0;                    set.VRAptr rV, 2*_VR;
+    ld.laddr [a1]+1;                    set.VRAptr rSt, 2;
+                        ld.h2l R0;      set.loop  g0, 2;
+    ld.laddr [a1]+1;    ld.l2h R0;
+                        ld.normal R0;   rd S0;
+    ld.laddr [a1]+1;                            rd S1;  rd S2;
+                        ld.normal R0;
+    ld.laddr [a1]+1;                            rd S1;  rd S2;  rmad;
+                        ld.normal R0;
+    ld.laddr [a1]+1;                            rd S1;  rd S2;  rmad;
+                        ld.normal R0;
+    ld.laddr [a1]+1;                            rd S1;  rd S2;  rmad;   wr.straight;    loop_begin;
+    st.laddr [a0]+1;    ld.normal R0;                                                   loop_end;
+    rts;
+    fnop;
+    fnop;
+_rhf_rhf_rhf_vAddSclr_asm_end:
+_rhp_rhp_rhp_vAddSclr_asm_end:
+_rsp_rsp_rsp_vAddSclr_asm_end:
+_chf_chf_chf_vAddSclr_asm_end:
+_chp_chp_chp_vAddSclr_asm_end:
+_csp_csp_csp_vAddSclr_asm_end:
+
+_rhf_rhf_rsp_vMultiSclr_asm_end:
+_rhp_rhp_rsp_vMultiSclr_asm_end:
+_rsp_rsp_rsp_vMultiSclr_asm_end:

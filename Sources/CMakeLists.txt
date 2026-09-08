@@ -17,11 +17,13 @@ set(COMMON_IQPLAYER_SOURCE
     dma_common.c
     vspa_memorymap.c
     iqstream_signals.c
+    conversion.sx
 )
 
 # CMake does not recognize .sx as assembly, only .s or .asm
 set_source_files_properties(
     crt0.s
+    conversion.sx
     PROPERTIES LANGUAGE C
 )
 
