@@ -12,9 +12,9 @@ void HandleCommandFlags(void) {
 
     for (int lane = 0; lane < RX_MAX_LANE_COUNT; ++lane) {
         if (flags & (HTV_SIGNAL_RXLANE0_ABORT << lane))
-            rx_lane_stop(0);
+            rx_lane_stop(lane);
         if (flags & (HTV_SIGNAL_RXLANE0_PRIME << lane))
-            rx_lane_prime(0);
+            rx_lane_prime(lane);
 
         if (flags & rxddr[lane].dma.htv_tcd_pending_flag_mask) {
             flags &= ~(rxddr[lane].dma.htv_tcd_pending_flag_mask);
@@ -23,9 +23,9 @@ void HandleCommandFlags(void) {
     }
     for (int lane = 0; lane < TX_MAX_LANE_COUNT; ++lane) {
         if (flags & (HTV_SIGNAL_TXLANE0_ABORT << lane))
-            tx_lane_abort(0);
+            tx_lane_abort(lane);
         if (flags & (HTV_SIGNAL_TXLANE0_PRIME << lane))
-            tx_lane_prime(0);
+            tx_lane_prime(lane);
 
         if (flags & txddr[lane].dma_hif.htv_tcd_pending_flag_mask) {
             flags &= ~(txddr[lane].dma_hif.htv_tcd_pending_flag_mask);

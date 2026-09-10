@@ -280,14 +280,6 @@ __attribute__((noreturn)) void main(void) {
             if (dmac_event(1 << adc[lane].dma_channel))
                 adc_dma_complete(lane);
         }
-        // if (dmac_event(1 << 4)) // RX1
-        //     adc_dma_complete(1);
-        // if (dmac_event(1 << 3)) // RX0
-        //     adc_dma_complete(0);
-        // if (dmac_event(1 << 2))
-        //     adc_dma_complete(1);
-        // if (dmac_event(1 << 1))
-        //     adc_dma_complete(0);
         // if (compl & (1<<0))
         //     dma_done_callback[0]();
     }

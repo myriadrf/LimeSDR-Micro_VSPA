@@ -42,7 +42,7 @@ typedef struct ADC_lane {
     uint16_t dma_channel;
 } adc_pipeline_t;
 
-#define RX_MAX_LANE_COUNT 1
+#define RX_MAX_LANE_COUNT 2
 
 extern rx_ddr_pipeline_t rxddr[RX_MAX_LANE_COUNT];
 extern adc_pipeline_t adc[RX_MAX_LANE_COUNT];

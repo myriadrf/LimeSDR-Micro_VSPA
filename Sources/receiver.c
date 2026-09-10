@@ -37,7 +37,7 @@
 #define DDR_XFER_SIZE_BYTES (DDR_XFER_SAMPLE_COUNT * 4)
 
 cfixed16_t adc_buffer[RX_MAX_LANE_COUNT][MAX_DMA_ENQ * ADC_XFER_SAMPLE_COUNT]
-    __attribute__((DMEM_ALIGNMENT_ATTR, section(".vcpu_dmem")));
+    __attribute__((DMEM_ALIGNMENT_ATTR, section(".ippu_dmem")));
 cfixed16_t ddr_write_buffer[RX_MAX_LANE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT]
     __attribute__((DMEM_ALIGNMENT_ATTR, section(".ippu_dmem")));
 

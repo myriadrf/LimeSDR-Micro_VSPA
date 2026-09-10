@@ -36,7 +36,7 @@
 cfixed16_t dac_buffer[TX_MAX_LANE_COUNT][MAX_DMA_ENQ * DAC_XFER_SAMPLE_COUNT]
     __attribute__((DMEM_ALIGNMENT_ATTR, section(".vcpu_dmem")));
 cfixed16_t ddr_read_buffer[TX_MAX_LANE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT]
-    __attribute__((DMEM_ALIGNMENT_ATTR, section(".ippu_dmem")));
+    __attribute__((DMEM_ALIGNMENT_ATTR, section(".vcpu_dmem")));
 
 tone_state_t tx_generator[TX_MAX_LANE_COUNT];
 dac_pipeline_t dac[TX_MAX_LANE_COUNT];
