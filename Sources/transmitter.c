@@ -248,7 +248,7 @@ static inline void interpol(cfixed16_t *dest, cfixed16_t *src, cfixed16_t *histo
     }
 }
 
-static const float upscalefactor = 4.0f;
+static const float upscalefactor = 16.0f;
 
 static inline void tx_pipeline_work(uint16_t lane) {
     if (txddr[lane].ready_buffer_count == 0)

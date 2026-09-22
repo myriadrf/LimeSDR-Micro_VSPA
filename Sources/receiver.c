@@ -229,7 +229,7 @@ static inline void decimate(uint16_t lane, cfixed16_t *restrict dest, volatile c
     TRACE_DURATION(T_DEC_BUFFER, 1, t1);
 }
 
-static const float downscalefactor = 0.25f;
+static const float downscalefactor = 0.0625f;
 
 void adc_dma_complete(uint16_t lane) {
     TRACE_START_DURATION(t1);
