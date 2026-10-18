@@ -380,6 +380,10 @@ static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
                 // ++pipe->count_dmac_complete;
                 // ++pipe->count_dmac_enque;
                 --pipe->buffers_provided;
+                // The dropped buffer carried the burst's START. Without it the following buffers of the burst would be
+                // enqueued with no DAC start scheduled and wait for ever (Tx stall). Start the burst at its first buffer
+                // that is still in time instead, as the underrun recovery does.
+                pipe->force_start = true;
                 return;
             }
         } else // transmit immediately
