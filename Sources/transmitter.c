@@ -483,7 +483,8 @@ void dac_dma_complete(uint16_t lane) {
     // check if DDR has available data
     if (!txpipe[lane].generate_tone && ddr_buffers_ready(&txddr[lane]) == 0) {
         // DDR depleted
-        if (dac_meta->flags & IQSTREAM_TRX_END == 0) {
+        // `flags & IQSTREAM_TRX_END == 0` parses as `flags & (IQSTREAM_TRX_END == 0)`, which is always 0
+        if ((dac_meta->flags & IQSTREAM_TRX_END) == 0) {
             ++tx_stats.dfe_udr;
         }
 
