@@ -16,10 +16,17 @@ typedef struct TxBufferMetaData {
     uint32_t flags;
 } tx_meta_t;
 
+// Tx DDR (host memory) read ring. The DAC needs a new 512-sample buffer every 16.7 us at 30.72 MS/s; with 2 ring
+// buffers (33 us) a PCIe read latency spike leaves no DDR buffer ready inside a burst and the DAC timeline slips.
+// 4 buffers (67 us) as in Lukas Brechtel's ring on the oai branch: at most MAX_DMA_ENQ reads are in flight on the DMA
+// channel, the rest of the ring is read ahead as reads complete. Power of 2 (the counters are 16 bit).
+#define TX_DDR_RING 4
+#define TX_DDR_RING_MASK (TX_DDR_RING - 1)
+
 typedef struct TxDDR_lane {
     vspa_dma_hif_t dma_hif;
     cfixed16_t *base_buffer;
-    tx_meta_t meta[2];
+    tx_meta_t meta[TX_DDR_RING];
     uint16_t count_dmac_enque;
     uint16_t count_dmac_complete;
     uint16_t dma_channel;

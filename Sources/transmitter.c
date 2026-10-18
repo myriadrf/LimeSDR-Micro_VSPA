@@ -52,7 +52,7 @@ static uint32_t tx_timer_values[9];
 
 cfixed16_t dac_buffer[TX_MAX_LANE_COUNT][MAX_DMA_ENQ * DAC_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN
     __attribute__((section(".ippu_dmem")));
-cfixed16_t ddr_read_buffer[TX_MAX_LANE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN
+cfixed16_t ddr_read_buffer[TX_MAX_LANE_COUNT][TX_DDR_RING * DDR_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN
     __attribute__((section(".ippu_dmem")));
 
 tx_pipeline_t txpipe[TX_MAX_LANE_COUNT] = { { false } };
@@ -93,13 +93,13 @@ static inline uint16_t ddr_buffers_in_use(const tx_ddr_pipeline_t *pipe) { retur
 static inline uint16_t ddr_buffers_ready(const tx_ddr_pipeline_t *pipe) {
     return pipe->count_dmac_complete - pipe->buffers_consumed;
 }
-static inline tx_meta_t *ddr_next_enq_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_enque & 0x1]; }
-static inline tx_meta_t *ddr_next_completed_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_complete & 0x1]; }
+static inline tx_meta_t *ddr_next_enq_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_enque & TX_DDR_RING_MASK]; }
+static inline tx_meta_t *ddr_next_completed_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_complete & TX_DDR_RING_MASK]; }
 static cfixed16_t *ddr_current_ready_buffer(const tx_ddr_pipeline_t *pipe) {
-    return pipe->base_buffer + (pipe->buffers_consumed & 0x1) * DDR_XFER_SAMPLE_COUNT;
+    return pipe->base_buffer + (pipe->buffers_consumed & TX_DDR_RING_MASK) * DDR_XFER_SAMPLE_COUNT;
 }
 
-static tx_meta_t *ddr_current_ready_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->buffers_consumed & 0x1]; }
+static tx_meta_t *ddr_current_ready_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->buffers_consumed & TX_DDR_RING_MASK]; }
 
 static inline bool is_tx_dma_allowed(void) { return (gpird(1, 1 << 16)); }
 static inline uint16_t dac_buffers_ready(const dac_pipeline_t *pipe) { return pipe->buffers_provided - pipe->count_dmac_enque; }
@@ -110,7 +110,7 @@ static inline uint32_t ts_to_phytime(uint32_t ts, uint16_t oversample_pow2) {
 
 static inline cfixed16_t *ddr_next_enq_buffer(const tx_ddr_pipeline_t *pipe) {
     // TODO: use modulo buffer registers for circular addressing?
-    return pipe->base_buffer + (pipe->count_dmac_enque & 0x1) * DDR_XFER_SAMPLE_COUNT;
+    return pipe->base_buffer + (pipe->count_dmac_enque & TX_DDR_RING_MASK) * DDR_XFER_SAMPLE_COUNT;
 }
 
 static inline uint16_t dac_buffers_in_use(const dac_pipeline_t *pipe) { return pipe->buffers_provided - pipe->count_dmac_complete; }
@@ -182,13 +182,16 @@ static inline void dac_stop_immediate() {
     dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
 }
 
-// @brief Attempt to enque all available DDR buffers
+// @brief Attempt to enque all available DDR buffers (free ring slots, at most MAX_DMA_ENQ reads in flight)
 static inline void tx_initial_ddr_enque(uint16_t lane) {
     tx_ddr_pipeline_t *const ddr = &txddr[lane];
-    if (ddr_buffers_in_use(ddr) < MAX_DMA_ENQ) {
-        tx_lane_try_ddr_enqueue(&txddr[lane], true);
-        if (ddr_buffers_in_use(ddr) < MAX_DMA_ENQ)
-            tx_lane_try_ddr_enqueue(&txddr[lane], true);
+    for (int i = 0; i < TX_DDR_RING; ++i) {
+        const uint16_t in_use = ddr_buffers_in_use(ddr);
+        if (in_use >= TX_DDR_RING || (uint16_t)(ddr->count_dmac_enque - ddr->count_dmac_complete) >= MAX_DMA_ENQ)
+            break;
+        tx_lane_try_ddr_enqueue(ddr, true);
+        if (ddr_buffers_in_use(ddr) == in_use)
+            break; // nothing queued by the host
     }
 }
 
@@ -277,6 +280,9 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
     TRACE_START_DURATION(t1);
 
     if (txpipe[0].generate_tone)
+        return;
+    // ring full, or the DMA channel already has its maximum of reads in flight
+    if (ddr_buffers_in_use(ddr) >= TX_DDR_RING || (uint16_t)(ddr->count_dmac_enque - ddr->count_dmac_complete) >= MAX_DMA_ENQ)
         return;
 
     const uint32_t tcd_count = tcd_fifo_size(&ddr->dma_hif.tcd_table);
@@ -559,7 +565,10 @@ static void tx_drop_ddr(uint16_t lane) {
 
     if (ddr->count_dmac_enque - ddr->count_dmac_complete > 0) {
         dmac_abort(1 << ddr->dma_channel);
-        if ((ddr->meta[0].flags | ddr->meta[1].flags) & IQSTREAM_DMA_TCD_END) {
+        uint32_t in_flight_flags = 0;
+        for (uint16_t i = ddr->count_dmac_complete; i != ddr->count_dmac_enque; ++i)
+            in_flight_flags |= ddr->meta[i & TX_DDR_RING_MASK].flags;
+        if (in_flight_flags & IQSTREAM_DMA_TCD_END) {
             ++ddr->dma_hif.tcd_table.done;
             vspa_to_host_signal(ddr->dma_hif.vth_tcd_done_flag_mask);
         }
@@ -597,6 +606,8 @@ void tx_ddr_complete(uint16_t lane) {
     TRACE_COUNTER(CNT_DDR_CMPL_ADVANCE, ddr_meta->phytime + stream_origin_phyticks - phytime_now());
     if (dac_buffers_in_use(&tx_dac[lane]) < MAX_DMA_ENQ)
         ddr_to_dac_work(lane);
+    // read ahead into the free ring slots while the DAC is still busy with earlier buffers
+    tx_initial_ddr_enque(lane);
 
     TRACE_DURATION(T_DDR_RD_COMPLETE, DEFAULT_THREAD_ID, t1);
 }
@@ -826,7 +837,7 @@ int tx_tone_enable(uint16_t lane, bool enable) {
 }
 
 void host_submitted_tx_tcd(uint16_t lane) {
-    if (ddr_buffers_in_use(&txddr[lane]) >= MAX_DMA_ENQ)
+    if (ddr_buffers_in_use(&txddr[lane]) >= TX_DDR_RING)
         return; // skip, all ddr buffers are in use
 
     // host only needs to signal the first TCD insertion to make VSPA go,
