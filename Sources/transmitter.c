@@ -63,6 +63,22 @@ tx_ddr_pipeline_t txddr[TX_MAX_LANE_COUNT];
 struct PipeStats tx_stats;
 tx_tdd_config_t tx_tdd;
 
+// Transmission window end diagnostics (host-readable in DMEM)
+struct TxWindowStats {
+    uint32_t go1_ext; // windows closed by the GO_1 phytimer event
+    uint32_t go1_fallback; // windows closed by the phytime check because no GO_1 event came
+    uint32_t end_late; // END was already in the past when it was scheduled (the compare can never match)
+    uint32_t phytmr_busy; // a raw phytimer DMA found the channel still busy after the timeout
+} tx_window_stats;
+
+// The DAC start/end/stop schedules write the comparators with a raw DMA on PHY_TMR_DMA_CHAN, the channel the
+// timer_trig_*() helpers use as well. dmac_enable() on a channel that is still running is lost, so wait for it.
+static inline void phytmr_dma_wait_free(void) {
+    WAIT_TIMEOUT_R(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
+        ++tx_window_stats.phytmr_busy;
+}
+
 // when DAC clock divider is disabled, 1 PHYtimer tick can represent only >=2 samples period
 static const uint16_t dac_clock_divider_disabled = 0; // TODO: read from config registers
 
@@ -114,6 +130,7 @@ static tx_meta_t *dac_next_free_meta(dac_pipeline_t *pipe) { return &pipe->meta[
 static tx_meta_t *dac_next_complete_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_complete & 0x1]; }
 
 static inline void schedule_dac_start(const tx_tdd_config_t *tdd, uint32_t phytime) {
+    phytmr_dma_wait_free();
     tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
     tx_timer_values[1] = ePhyTimerComparatorOut1;
     tx_timer_values[2] = phytime + tdd->dac_allowed;
@@ -131,6 +148,7 @@ static inline void schedule_dac_start(const tx_tdd_config_t *tdd, uint32_t phyti
 // of RF samples that were provided. The RF switch toggle phytime should be at the actual end of RF samples
 // to cut off padded samples.
 static inline void schedule_dac_end(const tx_tdd_config_t *tdd, uint32_t phytime, uint32_t rf_switch_phytime) {
+    phytmr_dma_wait_free();
     tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
     tx_timer_values[1] = ePhyTimerComparatorOut0;
     tx_timer_values[2] = phytime + tdd->dac_allowed;
@@ -158,6 +176,7 @@ const float tx_filter_taps_upsampling_x4[128] _VSPA_VECTOR_ALIGN = {
 };
 
 static inline void dac_stop_immediate() {
+    phytmr_dma_wait_free();
     tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
     tx_timer_values[1] = ePhyTimerComparatorOut0 << 2;
     dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
@@ -373,7 +392,13 @@ static inline void dac_schedule_end(dac_pipeline_t *pipe, const tx_meta_t *dac_m
         dac_off_phytime = dac_meta->phytime + stream_origin_phyticks + DAC_XFER_SAMPLE_COUNT;
     else
         dac_off_phytime = pipe->expected_end_phytime + DAC_XFER_SAMPLE_COUNT;
-    schedule_dac_end(&tx_tdd, dac_off_phytime, dac_off_phytime);
+    if ((int32_t)(dac_off_phytime - phytime_now()) <= 0) {
+        // The END compare can never match a value that already passed: Tx allowed would stay high, no GO_1 would
+        // come and the next START would have no rising edge. Stop now and let the window close.
+        ++tx_window_stats.end_late;
+        dac_stop_immediate();
+    } else
+        schedule_dac_end(&tx_tdd, dac_off_phytime, dac_off_phytime);
     pipe->end_scheduled = true;
 
     // current transmission window is active, and phytimers might be scheduled to trigger it's end.
@@ -381,7 +406,10 @@ static inline void dac_schedule_end(dac_pipeline_t *pipe, const tx_meta_t *dac_m
     // last DAC buffer DMA completion event triggers some time before the actual end of transmission,
     // so it cannot be used as phytimer rescheduling point. Need to schedule a dedicated GO event which
     // would trigger right after the actual transmission end and phytimers are done.
-    timer_trig_schedule(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut1, dac_off_phytime + DAC_XFER_SAMPLE_COUNT);
+    pipe->end_go_phytime = dac_off_phytime + DAC_XFER_SAMPLE_COUNT;
+    // GO_1 fires on a rising edge only: make sure the previous window's Out1 was cleared
+    timer_trig_immediate(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut0);
+    timer_trig_schedule(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut1, pipe->end_go_phytime);
 }
 
 static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
@@ -807,7 +835,24 @@ void host_submitted_tx_tcd(uint16_t lane) {
     tx_initial_ddr_enque(lane);
 }
 
+static void tx_window_closed(dac_pipeline_t *dac);
+
+// Close the window from the main loop (which runs on every Rx DMA completion) once the phytime passed its end, in case
+// no GO_1 event came (END scheduled too late, GO_1 not re-armed). Without it the next START waits for ever.
+static inline void tx_check_window_end(void) {
+    dac_pipeline_t *const dac = &tx_dac[0];
+    if (!(dac->in_progress && dac->end_scheduled))
+        return;
+    if ((int32_t)(phytime_now() - dac->end_go_phytime) < 0)
+        return;
+    ++tx_window_stats.go1_fallback;
+    dac_stop_immediate(); // the END compare may have been missed too: Tx allowed must be low before the next START
+    tx_window_closed(dac);
+    timer_trig_immediate_async(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut0); // disarm a GO_1 that may still come
+}
+
 void tx_check_axiq_status(void) {
+    tx_check_window_end();
     // TODO: interpolation path after underruns somehow end up with ddr buffers ready, but no events to trigger work
     if (ddr_buffers_ready(&txddr[0]) && !dac_buffers_in_use(&tx_dac[0]))
         ddr_to_dac_work(0);
@@ -835,17 +880,25 @@ void tx_check_axiq_status(void) {
     axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, 0);
 }
 
+// The current transmission window has ended: allow the next START and enqueue the DAC buffers waiting for it.
+static void tx_window_closed(dac_pipeline_t *dac) {
+    dac->in_progress = false;
+    dac->end_scheduled = false;
+    dac->end_deferred = false;
+    if (dac_buffers_ready(dac) > 0) {
+        dac_enq_pending_buffer(dac);
+        if (dac_buffers_ready(dac) > 0)
+            dac_enq_pending_buffer(dac);
+    }
+}
+
 void tx_external_trigger(void) {
     dac_pipeline_t *const dac = &tx_dac[0];
-    if (dac->in_progress) {
-        dac->in_progress = false;
-        dac->end_scheduled = false;
-        dac->end_deferred = false;
-        if (dac_buffers_ready(dac) > 0) {
-            dac_enq_pending_buffer(dac);
-            if (dac_buffers_ready(dac) > 0)
-                dac_enq_pending_buffer(dac);
-        }
+    // Only a GO_1 that belongs to a scheduled END closes the window; a late one after the phytime check already
+    // closed it must not end the following transmission.
+    if (dac->in_progress && dac->end_scheduled) {
+        ++tx_window_stats.go1_ext;
+        tx_window_closed(dac);
     }
     // need to clear trigger, go event is triggered only by rising edge
     timer_trig_immediate_async(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut0);

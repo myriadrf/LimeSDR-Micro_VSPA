@@ -38,6 +38,7 @@ typedef struct DAC_lane {
     uint16_t dma_channel;
     uint32_t expected_end_phytime; // needed for terminating transmissions without timestamps
     uint32_t start_phytime; // phytime of the current transmission window's START
+    uint32_t end_go_phytime; // phytime of the GO_1 event that closes the current transmission window
     bool end_scheduled;
     bool end_deferred; // END of a short burst: scheduled when its DAC buffer completes, after the START fired
     bool in_progress;
