@@ -346,8 +346,14 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
     // the clock limit is rough observation not guarantee.
     // uint32_t dma_ctrl = DMAC_MBRE | DMAC_RDC | ddr->dma_channel;
     uint32_t dma_ctrl = DMAC_RDC | ddr->dma_channel;
+    // Multi-burst reads (2101c9f) are off: on lp1 at 30.72 MS/s without interpolation (oversampling 1) they made the
+    // DDR read of a burst's last transfer complete late (DAC starved at every few bursts' tail), left the read channel
+    // stuck after a session (the next session never got a DDR completion), and cut the OAI UE's DL TCP from 9.2-10.1
+    // to 0.24-3.9 Mbit/s. TX_DDR_MBRE=1 restores them for clocks where they work.
+#if defined(TX_DDR_MBRE) && TX_DDR_MBRE
     if (int_ratio_pow2[0] == 0)
         dma_ctrl |= DMAC_MBRE; // if interpolation is not used, we're running at >40Msps, use burst mode.
+#endif
     if (vcpu_trig)
         dma_ctrl |= DMAC_TRIG_VCPU;
     iowr(DMA_XFR_CTRL, dma_ctrl);
