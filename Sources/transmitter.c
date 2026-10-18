@@ -50,8 +50,8 @@ static const uint32_t tx_timer_addrs[9] = {
 };
 static uint32_t tx_timer_values[9];
 
-cfixed16_t dac_buffer[TX_MAX_LANE_COUNT][MAX_DMA_ENQ * DAC_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN
-    __attribute__((section(".ippu_dmem")));
+// in VCPU DMEM: the IPPU DMEM holds the ADC buffers and the DDR read ring
+cfixed16_t dac_buffer[TX_MAX_LANE_COUNT][MAX_DMA_ENQ * DAC_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN;
 cfixed16_t ddr_read_buffer[TX_MAX_LANE_COUNT][TX_DDR_RING * DDR_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN
     __attribute__((section(".ippu_dmem")));
 
@@ -93,13 +93,13 @@ static inline uint16_t ddr_buffers_in_use(const tx_ddr_pipeline_t *pipe) { retur
 static inline uint16_t ddr_buffers_ready(const tx_ddr_pipeline_t *pipe) {
     return pipe->count_dmac_complete - pipe->buffers_consumed;
 }
-static inline tx_meta_t *ddr_next_enq_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_enque & TX_DDR_RING_MASK]; }
-static inline tx_meta_t *ddr_next_completed_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_complete & TX_DDR_RING_MASK]; }
+static inline tx_meta_t *ddr_next_enq_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->enq_slot]; }
+static inline tx_meta_t *ddr_next_completed_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->cpl_slot]; }
 static cfixed16_t *ddr_current_ready_buffer(const tx_ddr_pipeline_t *pipe) {
-    return pipe->base_buffer + (pipe->buffers_consumed & TX_DDR_RING_MASK) * DDR_XFER_SAMPLE_COUNT;
+    return pipe->base_buffer + pipe->consumed_slot * DDR_XFER_SAMPLE_COUNT;
 }
 
-static tx_meta_t *ddr_current_ready_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->buffers_consumed & TX_DDR_RING_MASK]; }
+static tx_meta_t *ddr_current_ready_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->consumed_slot]; }
 
 static inline bool is_tx_dma_allowed(void) { return (gpird(1, 1 << 16)); }
 static inline uint16_t dac_buffers_ready(const dac_pipeline_t *pipe) { return pipe->buffers_provided - pipe->count_dmac_enque; }
@@ -110,7 +110,7 @@ static inline uint32_t ts_to_phytime(uint32_t ts, uint16_t oversample_pow2) {
 
 static inline cfixed16_t *ddr_next_enq_buffer(const tx_ddr_pipeline_t *pipe) {
     // TODO: use modulo buffer registers for circular addressing?
-    return pipe->base_buffer + (pipe->count_dmac_enque & TX_DDR_RING_MASK) * DDR_XFER_SAMPLE_COUNT;
+    return pipe->base_buffer + pipe->enq_slot * DDR_XFER_SAMPLE_COUNT;
 }
 
 static inline uint16_t dac_buffers_in_use(const dac_pipeline_t *pipe) { return pipe->buffers_provided - pipe->count_dmac_complete; }
@@ -243,6 +243,7 @@ static void tx_ddr_reset(tx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
     ddr->count_dmac_enque = 0;
     ddr->count_dmac_complete = 0;
     ddr->buffers_consumed = 0;
+    ddr->enq_slot = ddr->cpl_slot = ddr->consumed_slot = 0;
     ddr->ready_buffer_offset = 0;
     memclr(ddr->meta, sizeof(ddr->meta));
 
@@ -360,6 +361,7 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
     TRACE_DMA_BEGIN(ddr->dma_channel, ddr->count_dmac_enque & 1);
 
     ++ddr->count_dmac_enque;
+    ddr->enq_slot = tx_ddr_next_slot(ddr->enq_slot);
     ++tx_stats.dfe_enq;
     TRACE_COUNTER(CNT_TX_DDR_ENQ, ddr->count_dmac_enque - ddr->count_dmac_complete);
     TRACE_DURATION(T_DDR_RD_ENQ, DEFAULT_THREAD_ID, t1);
@@ -504,6 +506,7 @@ static void ddr_to_dac_work(uint16_t lane) {
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);
         if (ddr->ready_buffer_offset >= DDR_XFER_SAMPLE_COUNT) {
             ++ddr->buffers_consumed;
+            ddr->consumed_slot = tx_ddr_next_slot(ddr->consumed_slot);
             TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));
             ddr->ready_buffer_offset = 0;
             dac_meta->flags |= ddr_meta->flags & IQSTREAM_TRX_END;
@@ -516,6 +519,7 @@ static void ddr_to_dac_work(uint16_t lane) {
         tx_qec_correction(dac_dest, ddr_src, DAC_XFER_SAMPLE_COUNT);
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);
         ++ddr->buffers_consumed;
+        ddr->consumed_slot = tx_ddr_next_slot(ddr->consumed_slot);
         TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));
         tx_lane_try_ddr_enqueue(ddr, true);
     }
@@ -572,8 +576,9 @@ static void tx_drop_ddr(uint16_t lane) {
     if (ddr->count_dmac_enque - ddr->count_dmac_complete > 0) {
         dmac_abort(1 << ddr->dma_channel);
         uint32_t in_flight_flags = 0;
-        for (uint16_t i = ddr->count_dmac_complete; i != ddr->count_dmac_enque; ++i)
-            in_flight_flags |= ddr->meta[i & TX_DDR_RING_MASK].flags;
+        uint8_t slot = ddr->cpl_slot;
+        for (uint32_t i = ddr->count_dmac_complete; i != ddr->count_dmac_enque; ++i, slot = tx_ddr_next_slot(slot))
+            in_flight_flags |= ddr->meta[slot].flags;
         if (in_flight_flags & IQSTREAM_DMA_TCD_END) {
             ++ddr->dma_hif.tcd_table.done;
             vspa_to_host_signal(ddr->dma_hif.vth_tcd_done_flag_mask);
@@ -585,6 +590,7 @@ static void tx_drop_ddr(uint16_t lane) {
     ddr->count_dmac_enque = 0;
     ddr->count_dmac_complete = 0;
     ddr->buffers_consumed = 0;
+    ddr->enq_slot = ddr->cpl_slot = ddr->consumed_slot = 0;
     ddr->ready_buffer_offset = 0;
     memclr(ddr->meta, sizeof(ddr->meta));
 }
@@ -598,6 +604,7 @@ void tx_ddr_complete(uint16_t lane) {
 
     tx_meta_t *const ddr_meta = ddr_next_completed_meta(ddr);
     ++ddr->count_dmac_complete;
+    ddr->cpl_slot = tx_ddr_next_slot(ddr->cpl_slot);
     ++tx_stats.dfe_compl;
     TRACE_COUNTER(CNT_TX_DDR_ENQ, ddr->count_dmac_enque - ddr->count_dmac_complete);
     TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));
@@ -773,6 +780,7 @@ static inline void tx_handle_dac_underrun(void) {
             ++tx_stats.dfe_drop;
             ++proxy.tx_drop;
             ++ddr->buffers_consumed;
+            ddr->consumed_slot = tx_ddr_next_slot(ddr->consumed_slot);
             tx_lane_try_ddr_enqueue(ddr, true);
             ddr->ready_buffer_offset = 0;
             TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));

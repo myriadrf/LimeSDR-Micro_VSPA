@@ -17,22 +17,28 @@ typedef struct TxBufferMetaData {
 } tx_meta_t;
 
 // Tx DDR (host memory) read ring. The DAC needs a new 512-sample buffer every 16.7 us at 30.72 MS/s; with 2 ring
-// buffers (33 us) a PCIe read latency spike leaves no DDR buffer ready inside a burst and the DAC timeline slips.
-// 4 buffers (67 us) as in Lukas Brechtel's ring on the oai branch: at most MAX_DMA_ENQ reads are in flight on the DMA
-// channel, the rest of the ring is read ahead as reads complete. Power of 2 (the counters are 16 bit).
-#define TX_DDR_RING 4
-#define TX_DDR_RING_MASK (TX_DDR_RING - 1)
+// buffers (33 us) a PCIe read latency spike, or a read rate a little below the sample rate during a long burst, leaves
+// no DDR buffer ready inside the burst and the DAC timeline slips. 6 buffers (100 us), as in Lukas Brechtel's ring on
+// the oai branch: at most MAX_DMA_ENQ reads are in flight on the DMA channel, the rest of the ring is read ahead as
+// reads complete and refilled in the gap before the next burst. 6 is not a power of 2 and 2^32 is not a multiple of 6,
+// so the ring slots are kept separately (enq_slot/cpl_slot/consumed_slot, as in Lukas's ring); the counters only count.
+#define TX_DDR_RING 6
 
 typedef struct TxDDR_lane {
     vspa_dma_hif_t dma_hif;
     cfixed16_t *base_buffer;
     tx_meta_t meta[TX_DDR_RING];
-    uint16_t count_dmac_enque;
-    uint16_t count_dmac_complete;
+    uint32_t count_dmac_enque;
+    uint32_t count_dmac_complete;
     uint16_t dma_channel;
-    uint16_t buffers_consumed;
+    uint32_t buffers_consumed;
     uint16_t ready_buffer_offset;
+    uint8_t enq_slot;      // ring slot of the next DDR read (count_dmac_enque mod TX_DDR_RING)
+    uint8_t cpl_slot;      // ring slot of the next DDR read to complete (count_dmac_complete mod TX_DDR_RING)
+    uint8_t consumed_slot; // ring slot of the oldest ready buffer (buffers_consumed mod TX_DDR_RING)
 } tx_ddr_pipeline_t;
+
+static inline uint8_t tx_ddr_next_slot(uint8_t slot) { return slot + 1 == TX_DDR_RING ? 0 : slot + 1; }
 
 typedef struct DAC_lane {
     cfixed16_t *base_buffer;
