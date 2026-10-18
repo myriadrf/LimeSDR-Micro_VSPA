@@ -36,14 +36,17 @@
 extern uint32_t stream_origin_phyticks;
 
 static const uint32_t reschedule_time = DAC_XFER_SAMPLE_COUNT / 2;
+// Order: DAC DMA allowed, PA_EN, RF switch. The RF switch comparator (RFCTL_0) is written last so that it can be left
+// out: on LimeSDR-Micro v1+ it is the Tx band switch (TX_SW), which LimeSDR_Micro::SetAntenna sets with a forced output.
+// Re-programming it, even with "no change", disables it first, and that drops the forced output to 0.
 static const uint32_t tx_timer_addrs[9] = {
     // DAC DMA
     PHY_TMR_SC_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED),
     PHY_TMR_V_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED),
-    // RF switch
-    PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_V_ADDR(PHY_TIMER_COMP_RFCTL_0),
     // PA_EN
-    PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_5), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_5), PHY_TMR_V_ADDR(PHY_TIMER_COMP_RFCTL_5)
+    PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_5), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_5), PHY_TMR_V_ADDR(PHY_TIMER_COMP_RFCTL_5),
+    // RF switch
+    PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_V_ADDR(PHY_TIMER_COMP_RFCTL_0)
 };
 static uint32_t tx_timer_values[9];
 
@@ -115,12 +118,13 @@ static inline void schedule_dac_start(const tx_tdd_config_t *tdd, uint32_t phyti
     tx_timer_values[1] = ePhyTimerComparatorOut1;
     tx_timer_values[2] = phytime + tdd->dac_allowed;
     tx_timer_values[3] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[4] = tdd->rf_sw_on_comparator_out;
-    tx_timer_values[5] = phytime + tdd->rf_sw_on;
+    tx_timer_values[4] = tdd->pa_on_comparator_out;
+    tx_timer_values[5] = phytime + tdd->pa_on;
     tx_timer_values[6] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[7] = tdd->pa_on_comparator_out;
-    tx_timer_values[8] = phytime + tdd->pa_on;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 9, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
+    tx_timer_values[7] = tdd->rf_sw_on_comparator_out;
+    tx_timer_values[8] = phytime + tdd->rf_sw_on;
+    const uint16_t count = tdd->rf_sw_on_comparator_out == ePhyTimerComparatorNoChange ? 6 : 9;
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
 }
 
 // DAC AXIQ transfers have minimum size requirements, therefore it's disable phytime might be past the amount
@@ -131,12 +135,13 @@ static inline void schedule_dac_end(const tx_tdd_config_t *tdd, uint32_t phytime
     tx_timer_values[1] = ePhyTimerComparatorOut0;
     tx_timer_values[2] = phytime + tdd->dac_allowed;
     tx_timer_values[3] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[4] = tdd->rf_sw_off_comparator_out;
-    tx_timer_values[5] = phytime + tdd->rf_sw_off;
+    tx_timer_values[4] = tdd->pa_off_comparator_out;
+    tx_timer_values[5] = phytime + tdd->pa_off;
     tx_timer_values[6] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[7] = tdd->pa_off_comparator_out;
-    tx_timer_values[8] = phytime + tdd->pa_off;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 9, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
+    tx_timer_values[7] = tdd->rf_sw_off_comparator_out;
+    tx_timer_values[8] = rf_switch_phytime + tdd->rf_sw_off;
+    const uint16_t count = tdd->rf_sw_off_comparator_out == ePhyTimerComparatorNoChange ? 6 : 9;
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
 }
 
 // Interpolation function prototypes
