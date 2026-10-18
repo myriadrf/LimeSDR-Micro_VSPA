@@ -193,6 +193,7 @@ static void tx_dac_reset(dac_pipeline_t *dac, cfixed16_t *buffer) {
     dac->expected_end_phytime = 0;
     dac->in_progress = false;
     dac->end_scheduled = false;
+    dac->end_deferred = false;
     dac->force_start = false;
     memclr(dac->meta, sizeof(dac->meta));
 
@@ -365,6 +366,24 @@ static inline void interpol(cfixed16_t *dest, cfixed16_t *src, cfixed16_t *histo
     }
 }
 
+// Schedule the end of the current transmission window at the end of this DAC buffer.
+static inline void dac_schedule_end(dac_pipeline_t *pipe, const tx_meta_t *dac_meta) {
+    uint32_t dac_off_phytime;
+    if (dac_meta->flags & IQSTREAM_HAS_TIMESTAMP)
+        dac_off_phytime = dac_meta->phytime + stream_origin_phyticks + DAC_XFER_SAMPLE_COUNT;
+    else
+        dac_off_phytime = pipe->expected_end_phytime + DAC_XFER_SAMPLE_COUNT;
+    schedule_dac_end(&tx_tdd, dac_off_phytime, dac_off_phytime);
+    pipe->end_scheduled = true;
+
+    // current transmission window is active, and phytimers might be scheduled to trigger it's end.
+    // Cannot schedule next window start, while the timers are still pending and
+    // last DAC buffer DMA completion event triggers some time before the actual end of transmission,
+    // so it cannot be used as phytimer rescheduling point. Need to schedule a dedicated GO event which
+    // would trigger right after the actual transmission end and phytimers are done.
+    timer_trig_schedule(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut1, dac_off_phytime + DAC_XFER_SAMPLE_COUNT);
+}
+
 static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
     tx_meta_t *const dac_meta = dac_next_enq_meta(pipe);
     if (dac_meta->flags & IQSTREAM_TRX_START || pipe->force_start) {
@@ -392,23 +411,22 @@ static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
         schedule_dac_start(&tx_tdd, tx_start_phytime);
         TRACE_EVENT(T_TX_BURST_START, 3, dac_meta->phytime);
         pipe->in_progress = true;
+        pipe->start_phytime = tx_start_phytime;
         pipe->force_start = false;
         pipe->expected_end_phytime = tx_start_phytime + DAC_XFER_SAMPLE_COUNT;
+        // A burst that fits in one DAC buffer carries START and END together, and it needs its END too: otherwise no
+        // GO_1 closes the window and every later START waits for ever. START and END use the same comparator (Tx
+        // allowed), so scheduling the END now would overwrite the pending START: schedule it when this buffer's DAC
+        // transfer completes, which is after the START fired.
+        if (dac_meta->flags & IQSTREAM_TRX_END)
+            pipe->end_deferred = true;
     } else if (dac_meta->flags & IQSTREAM_TRX_END) {
-        uint32_t dac_off_phytime;
-        if (dac_meta->flags & IQSTREAM_HAS_TIMESTAMP)
-            dac_off_phytime = dac_meta->phytime + stream_origin_phyticks + DAC_XFER_SAMPLE_COUNT;
+        // Short burst (two DAC buffers, or one DDR buffer interpolated): the END buffer is enqueued before the START
+        // fired. Same comparator: defer the END as above.
+        if (pipe->in_progress && (int32_t)(phytime_now() - pipe->start_phytime) < 0)
+            pipe->end_deferred = true;
         else
-            dac_off_phytime = pipe->expected_end_phytime + DAC_XFER_SAMPLE_COUNT;
-        schedule_dac_end(&tx_tdd, dac_off_phytime, dac_off_phytime);
-        pipe->end_scheduled = true;
-
-        // current transmission window is active, and phytimers might be scheduled to trigger it's end.
-        // Cannot schedule next window start, while the timers are still pending and
-        // last DAC buffer DMA completion event triggers some time before the actual end of transmission,
-        // so it cannot be used as phytimer rescheduling point. Need to schedule a dedicated GO event which
-        // would trigger right after the actual transmission end and phytimers are done.
-        timer_trig_schedule(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut1, dac_off_phytime + DAC_XFER_SAMPLE_COUNT);
+            dac_schedule_end(pipe, dac_meta);
     } else
         pipe->expected_end_phytime += DAC_XFER_SAMPLE_COUNT;
     const uint32_t dac_dma_flags = dac_meta->flags & IQSTREAM_TRX_END ? DMAC_FIFO_RESET : 0;
@@ -483,6 +501,10 @@ void dac_dma_complete(uint16_t lane) {
     tx_meta_t *const dac_meta = dac_next_complete_meta(&tx_dac[lane]);
     ++tx_dac[lane].count_dmac_complete;
     ++tx_stats.afe_compl;
+    if ((dac_meta->flags & IQSTREAM_TRX_END) && tx_dac[lane].end_deferred) {
+        tx_dac[lane].end_deferred = false;
+        dac_schedule_end(&tx_dac[lane], dac_meta);
+    }
 
     // check if DDR has available data
     if (!txpipe[lane].generate_tone && ddr_buffers_ready(&txddr[lane]) == 0) {
@@ -632,6 +654,7 @@ static inline void dac_axiq_reset(uint16_t lane) {
     tx_dac[lane].count_dmac_complete = 0;
     tx_dac[lane].count_dmac_enque = 0;
     tx_dac[lane].end_scheduled = false;
+    tx_dac[lane].end_deferred = false;
     tx_dac[lane].in_progress = false;
 
     // ensure abort has ended before issuing new dma commands
@@ -672,6 +695,7 @@ static inline void tx_handle_dac_underrun(void) {
     dac->count_dmac_enque = 0;
     dac->in_progress = false;
     dac->end_scheduled = false;
+    dac->end_deferred = false;
     dac->force_start = true;
 
     // ensure abort has ended before issuing new dma commands
@@ -816,6 +840,7 @@ void tx_external_trigger(void) {
     if (dac->in_progress) {
         dac->in_progress = false;
         dac->end_scheduled = false;
+        dac->end_deferred = false;
         if (dac_buffers_ready(dac) > 0) {
             dac_enq_pending_buffer(dac);
             if (dac_buffers_ready(dac) > 0)
