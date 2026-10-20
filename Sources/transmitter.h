@@ -82,6 +82,7 @@ extern tone_state_t tx_tone_state[TX_MAX_LANE_COUNT];
 void transmitter_init(void);
 void tx_lane_setup(uint16_t lane, uint16_t channel);
 int tx_set_oversampling(uint16_t lane, uint16_t oversample_pow2);
+int tx_set_sample_format(uint16_t lane, iq_sample_format_e format);
 
 void tx_lane_ddr_enable(uint16_t lane, bool enable);
 

@@ -59,6 +59,7 @@ extern adc_pipeline_t rx_adc[RX_MAX_LANE_COUNT];
 void receiver_init(void);
 int rx_select_channel(uint16_t lane, e_rx_channel channel);
 int rx_set_oversampling(uint16_t lane, uint16_t decimate_pow2);
+int rx_set_sample_format(uint16_t lane, iq_sample_format_e format);
 
 void rx_lane_prime(uint16_t lane);
 void rx_lane_stop(uint16_t lane);

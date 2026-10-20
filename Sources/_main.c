@@ -162,6 +162,13 @@ uint64_t HandleCommand(uint64_t msg64) {
         return (MAKEDWORD(0, tx_set_oversampling(lane, ovr_pow2)));
         break;
     }
+    case MBOX_OPC_SET_SAMPLE_FORMAT: {
+        const uint8_t lane = msg_lsb & 0xFF;
+        const iq_sample_format_e format = (iq_sample_format_e)((msg_lsb >> 8) & 0xFF);
+        const bool tx = msg_lsb & (1 << 16);
+        return (MAKEDWORD(0, tx ? tx_set_sample_format(lane, format) : rx_set_sample_format(lane, format)));
+        break;
+    }
     case MBOX_OPC_SINGLE_TONE_TX: {
         const uint8_t lane = msg_lsb & 0xFF;
         const bool enable = msg_lsb & (1 << 16);

@@ -34,6 +34,7 @@
 #define DDR_XFER_SIZE_BYTES (DDR_XFER_SAMPLE_COUNT * 4)
 
 extern uint32_t stream_origin_phyticks;
+float upscalefactor[TX_MAX_LANE_COUNT]; // when user sample format is only 12bit full scale, upscale to 16bits full scale
 
 static const uint32_t reschedule_time = DAC_XFER_SAMPLE_COUNT / 2;
 // Order: DAC DMA allowed, PA_EN, RF switch. The RF switch comparator (RFCTL_0) is written last so that it can be left
@@ -95,7 +96,7 @@ static inline uint16_t ddr_buffers_ready(const tx_ddr_pipeline_t *pipe) {
 }
 static inline tx_meta_t *ddr_next_enq_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->enq_slot]; }
 static inline tx_meta_t *ddr_next_completed_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->cpl_slot]; }
-static cfixed16_t *ddr_current_ready_buffer(const tx_ddr_pipeline_t *pipe) {
+static inline cfixed16_t *ddr_current_ready_buffer(const tx_ddr_pipeline_t *pipe) {
     return pipe->base_buffer + pipe->consumed_slot * DDR_XFER_SAMPLE_COUNT;
 }
 
@@ -125,9 +126,9 @@ static cfixed16_t *dac_next_free_buffer(const dac_pipeline_t *pipe) {
     return pipe->base_buffer + (pipe->buffers_provided & 0x1) * DAC_XFER_SAMPLE_COUNT;
 }
 
-static tx_meta_t *dac_next_free_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->buffers_provided & 0x1]; }
+static inline tx_meta_t *dac_next_free_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->buffers_provided & 0x1]; }
 
-static tx_meta_t *dac_next_complete_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_complete & 0x1]; }
+static inline tx_meta_t *dac_next_complete_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_complete & 0x1]; }
 
 static inline void schedule_dac_start(const tx_tdd_config_t *tdd, uint32_t phytime) {
     phytmr_dma_wait_free();
@@ -224,10 +225,7 @@ static void tx_dac_reset(dac_pipeline_t *dac, cfixed16_t *buffer) {
 
     // reset dma
     const uint32_t dma_mask = (1 << dac->dma_channel);
-    dmac_clear_errxfr(dma_mask);
-    dmac_clear_errcfg(dma_mask);
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
+    dma_clear_all_bits(dma_mask);
 }
 
 static inline void tx_host_dma_reset(tx_ddr_pipeline_t *ddr) {
@@ -251,10 +249,7 @@ static void tx_ddr_reset(tx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
     dmac_abort(dma_mask);
     WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
 
-    dmac_clear_errxfr(dma_mask);
-    dmac_clear_errcfg(dma_mask);
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
+    dma_clear_all_bits(dma_mask);
 }
 
 // Configure pipline's persistent parameters
@@ -501,6 +496,7 @@ static void ddr_to_dac_work(uint16_t lane) {
 
         // qec inplace
         tx_qec_correction(dac_dest, dac_dest, DAC_XFER_SAMPLE_COUNT);
+        rhf_rhf_rsp_vMultiSclr_asm(dac_dest, dac_dest, &upscalefactor, DAC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         ddr_meta->phytime += DAC_XFER_SAMPLE_COUNT;
         dac_meta->flags &= ~IQSTREAM_TRX_END;
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);
@@ -517,6 +513,7 @@ static void ddr_to_dac_work(uint16_t lane) {
         if (txpipe[lane].generate_tone)
             gen_nco_single_tone(ddr_src, DDR_XFER_SAMPLE_COUNT, &tx_tone_state[lane]);
         tx_qec_correction(dac_dest, ddr_src, DAC_XFER_SAMPLE_COUNT);
+        rhf_rhf_rsp_vMultiSclr_asm(dac_dest, dac_dest, &upscalefactor, DAC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);
         ++ddr->buffers_consumed;
         ddr->consumed_slot = tx_ddr_next_slot(ddr->consumed_slot);
@@ -641,6 +638,7 @@ void transmitter_init(void) {
         dma_hif->vth_tcd_done_flag_mask = (VTH_SIGNAL_TXLANE0_TCD_DONE << lane);
         tcd_fifo_reset(&dma_hif->tcd_table);
         clear_htv_signal(dma_hif->htv_tcd_pending_flag_mask);
+        tx_set_sample_format(lane, IQ_SAMPLE_FORMAT_I16);
     }
 
     tx_lane_setup(0, 0);
@@ -651,6 +649,16 @@ int tx_set_oversampling(uint16_t lane, uint16_t oversample_pow2) {
         return lime_Result_InvalidValue;
 
     int_ratio_pow2[lane] = oversample_pow2;
+    return lime_Result_Success;
+}
+
+int tx_set_sample_format(uint16_t lane, iq_sample_format_e format) {
+    if (lane >= TX_MAX_LANE_COUNT)
+        return lime_Result_InvalidValue;
+    if (format == IQ_SAMPLE_FORMAT_I12)
+        upscalefactor[lane] = 16.0f;
+    else
+        upscalefactor[lane] = 1.0f;
     return lime_Result_Success;
 }
 

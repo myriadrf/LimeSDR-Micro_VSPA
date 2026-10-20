@@ -46,6 +46,8 @@
 static const uint16_t adc_clock_divider_disabled[RX_MAX_LANE_COUNT] = { 0 }; // TODO: read from config registers
 
 extern uint32_t stream_origin_phyticks;
+static float
+    downscalefactor[RX_MAX_LANE_COUNT]; // when user sample format is 12bit fullscale, downscale from ADC 16bit fullscale to 12bit
 
 cfixed16_t adc_buffer[RX_MAX_LANE_COUNT][MAX_DMA_ENQ * ADC_XFER_SAMPLE_COUNT]
     __attribute__((section(".ippu_dmem"))) _VSPA_VECTOR_ALIGN;
@@ -237,6 +239,16 @@ int rx_set_oversampling(uint16_t lane, uint16_t decimate_pow2) {
     return lime_Result_Success;
 }
 
+int rx_set_sample_format(uint16_t lane, iq_sample_format_e format) {
+    if (lane >= RX_MAX_LANE_COUNT)
+        return lime_Result_InvalidValue;
+    if (format == IQ_SAMPLE_FORMAT_I12)
+        downscalefactor[lane] = 0.0625f;
+    else
+        downscalefactor[lane] = 1.0f;
+    return lime_Result_Success;
+}
+
 // Prime ADC AXIQ and DMA engine, the actual start is triggered by phytimer
 static inline void initial_adc_enq(uint16_t lane) {
     adc_pipeline_t *const adc = &rx_adc[lane];
@@ -412,6 +424,8 @@ void adc_dma_complete(uint16_t lane) {
             ddr->buf_timestamp = phyticks_to_ts(buffer_time, lane);
         // in place processing
         rx_qec_correction(completed_buffer, completed_buffer, ADC_XFER_SAMPLE_COUNT);
+        rhf_rhf_rsp_vMultiSclr_asm(completed_buffer, completed_buffer, &downscalefactor[lane],
+                                   ADC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         decimate(lane, dest + ddr->buf_filled, completed_buffer, ADC_XFER_SAMPLE_COUNT);
         TRACE_DURATION(T_RX_WORK, DEFAULT_THREAD_ID, t2);
         ddr->buf_filled += (ADC_XFER_SAMPLE_COUNT >> ddr->decimate_pow2);
@@ -424,6 +438,7 @@ void adc_dma_complete(uint16_t lane) {
     } else {
         // process into ddr buffer
         rx_qec_correction(dest, completed_buffer, ADC_XFER_SAMPLE_COUNT);
+        rhf_rhf_rsp_vMultiSclr_asm(dest, dest, &downscalefactor[lane], ADC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         TRACE_DURATION(T_RX_WORK, DEFAULT_THREAD_ID, t2);
         if (dmac_is_complete(1 << ddr->dma_channel))
             rx_ddr_dma_complete(lane);
@@ -466,6 +481,7 @@ void receiver_init(void) {
     for (int i = 0; i < RX_MAX_LANE_COUNT; ++i) {
         rx_select_channel(i, (e_rx_channel)(VSPA_RX0 + i));
         rx_set_oversampling(i, 0);
+        rx_set_sample_format(i, IQ_SAMPLE_FORMAT_I16);
     }
 }
 
