@@ -75,6 +75,8 @@ struct PipeStats rx_stats[RX_MAX_LANE_COUNT];
 rx_ddr_pipeline_t rx_ddr[RX_MAX_LANE_COUNT];
 adc_pipeline_t rx_adc[RX_MAX_LANE_COUNT];
 
+static rx_channel_config_t rx_channel_cfg[RX_CHANNEL_COUNT];
+
 static inline void memset(void *ptr, uint16_t value, int16_t length) {
     for (int i = 0; i < length; ++i)
         ((uint16_t *)ptr)[i] = value;
@@ -208,9 +210,10 @@ static inline void rx_ddr_pipe_reset(rx_ddr_pipeline_t *ddr, cfixed16_t *buffer)
 }
 
 int rx_select_channel(uint16_t lane, e_rx_channel channel) {
-    if (lane > RX_MAX_LANE_COUNT)
+    if (lane >= RX_MAX_LANE_COUNT || channel > VSPA_RX1)
         return lime_Result_InvalidValue;
     adc_pipeline_t *const adc = &rx_adc[lane];
+    adc->channel = channel;
     adc->axi_fifo_addr = RO0_AXI_FIFO_ADDR + (channel * 0x1000) + addr_beat_offset;
     adc->axi_fifo_index = (enum axiq_fifo_e)(AXIQ_FIFO_RX0 + channel);
     adc->dma_channel = RO0_ADC_RD_DMA_CHANNEL + channel;
@@ -218,6 +221,7 @@ int rx_select_channel(uint16_t lane, e_rx_channel channel) {
     rx_adc_pipe_reset(&rx_adc[lane], adc_buffer[lane]);
 
     rx_ddr[lane].dma_channel = DDR_WR_DMA_CHANNEL_1 + lane;
+    rx_ddr[lane].decimate_pow2 = rx_channel_cfg[channel].decimate_pow2;
     rx_ddr_pipe_reset(&rx_ddr[lane], ddr_write_buffer[lane]);
 
     rx_generator[lane].amplitude = 0.9;
@@ -231,11 +235,12 @@ int rx_select_channel(uint16_t lane, e_rx_channel channel) {
     return lime_Result_Success;
 }
 
-int rx_set_oversampling(uint16_t lane, uint16_t decimate_pow2) {
-    if (lane > RX_MAX_LANE_COUNT)
+// Takes effect when a lane selects the channel or is primed for streaming
+int rx_set_oversampling(e_rx_channel channel, uint16_t decimate_pow2) {
+    if (channel >= RX_CHANNEL_COUNT || decimate_pow2 > 2)
         return lime_Result_InvalidValue;
 
-    rx_ddr[lane].decimate_pow2 = decimate_pow2;
+    rx_channel_cfg[channel].decimate_pow2 = decimate_pow2;
     return lime_Result_Success;
 }
 
@@ -247,6 +252,12 @@ int rx_set_sample_format(uint16_t lane, iq_sample_format_e format) {
     else
         downscalefactor[lane] = 1.0f;
     return lime_Result_Success;
+}
+
+int rx_get_oversampling(e_rx_channel channel) {
+    if (channel >= RX_CHANNEL_COUNT)
+        return lime_Result_InvalidValue;
+    return rx_channel_cfg[channel].decimate_pow2;
 }
 
 // Prime ADC AXIQ and DMA engine, the actual start is triggered by phytimer
@@ -478,6 +489,8 @@ void rx_ddr_dma_complete(uint16_t lane) {
 }
 
 void receiver_init(void) {
+    for (int ch = 0; ch < RX_CHANNEL_COUNT; ++ch)
+        rx_set_oversampling((e_rx_channel)ch, 0);
     for (int i = 0; i < RX_MAX_LANE_COUNT; ++i) {
         rx_select_channel(i, (e_rx_channel)(VSPA_RX0 + i));
         rx_set_oversampling(i, 0);
@@ -494,6 +507,7 @@ void rx_lane_prime(uint16_t lane) {
     axiq_fifo_rx_cr(AXIQ_BANK_0, fifo_index, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
     axiq_fifo_rx_cr(AXIQ_BANK_0, fifo_index, AXIQ_CR_CLRERR, 0);
 
+    rx_ddr[lane].decimate_pow2 = rx_channel_cfg[adc->channel].decimate_pow2;
     rx_adc_pipe_reset(&rx_adc[lane], adc_buffer[lane]);
     rx_ddr_pipe_reset(&rx_ddr[lane], ddr_write_buffer[lane]);
     memset(&rx_stats[lane], 0, sizeof(struct PipeStats));

@@ -18,6 +18,13 @@ typedef enum {
     VSPA_RX1,
 } e_rx_channel;
 
+#define RX_CHANNEL_COUNT 4
+
+// Persistent channel parameters, applied to the lane which streams the channel
+typedef struct RxChannelConfig {
+    uint16_t decimate_pow2;
+} rx_channel_config_t;
+
 typedef struct RxBufferMetaData {
     uint64_t timestamp; // first sample's timestamp, samples count since stream start (after decimation)
     uint32_t size; // bytes of contiguous samples written into the TCD buffer
@@ -36,7 +43,7 @@ typedef struct RxDDR_lane {
     uint32_t count_dmac_complete;
     uint16_t dma_channel;
     uint16_t buf_filled;
-    uint16_t decimate_pow2;
+    uint16_t decimate_pow2; // copy of the selected channel's config, latched on channel select and lane prime
 } rx_ddr_pipeline_t;
 
 typedef struct ADC_lane {
@@ -48,6 +55,7 @@ typedef struct ADC_lane {
     uint16_t axi_fifo_index;
     uint16_t dma_channel;
     uint16_t phytimer_id;
+    uint16_t channel; // e_rx_channel
     bool sampling; // rx_allowed is raised, or scheduled to be raised
 } adc_pipeline_t;
 
@@ -58,8 +66,10 @@ extern adc_pipeline_t rx_adc[RX_MAX_LANE_COUNT];
 
 void receiver_init(void);
 int rx_select_channel(uint16_t lane, e_rx_channel channel);
-int rx_set_oversampling(uint16_t lane, uint16_t decimate_pow2);
 int rx_set_sample_format(uint16_t lane, iq_sample_format_e format);
+int rx_set_oversampling(e_rx_channel channel, uint16_t decimate_pow2);
+// @return channel's decimation as power of 2, or negative lime_Result on error
+int rx_get_oversampling(e_rx_channel channel);
 
 void rx_lane_prime(uint16_t lane);
 void rx_lane_stop(uint16_t lane);

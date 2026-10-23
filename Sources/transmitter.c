@@ -85,7 +85,9 @@ static const uint16_t dac_clock_divider_disabled = 0; // TODO: read from config 
 
 #define TX_MAX_UPSAMPLE_TAPS 64
 cfixed16_t int_history[TX_MAX_UPSAMPLE_TAPS] __attribute__((aligned(64), section(".vcpu_dmem"))) = { 0 };
-uint16_t int_ratio_pow2[TX_MAX_LANE_COUNT] = { 0 };
+uint16_t int_ratio_pow2[TX_MAX_LANE_COUNT] = { 0 }; // copy of the lane's channel config, latched on lane prime
+
+static tx_channel_config_t tx_channel_cfg[TX_CHANNEL_COUNT];
 
 static inline uint32_t phytime_now(void) { return gpird(4); }
 
@@ -256,6 +258,7 @@ static void tx_ddr_reset(tx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
 void tx_lane_setup(uint16_t lane, uint16_t channel) {
     channel = 0; // TX has only 1 channel
     memclr(&tx_stats, sizeof(tx_stats));
+    tx_dac[lane].channel = channel;
     tx_dac[lane].axi_fifo_addr = dac_axi_fifo_addr + (channel * 0x1000);
     tx_dac[lane].axi_fifo_index = (enum axiq_fifo_e)(AXIQ_FIFO_TX0) + channel;
     tx_dac[lane].dma_channel = TX_DAC_WR_DMA_CHANNEL + channel;
@@ -644,11 +647,12 @@ void transmitter_init(void) {
     tx_lane_setup(0, 0);
 }
 
-int tx_set_oversampling(uint16_t lane, uint16_t oversample_pow2) {
-    if (lane > TX_MAX_LANE_COUNT)
+// Takes effect when the lane streaming the channel is primed
+int tx_set_oversampling(uint16_t channel, uint16_t oversample_pow2) {
+    if (channel >= TX_CHANNEL_COUNT || oversample_pow2 > 2)
         return lime_Result_InvalidValue;
 
-    int_ratio_pow2[lane] = oversample_pow2;
+    tx_channel_cfg[channel].interpolate_pow2 = oversample_pow2;
     return lime_Result_Success;
 }
 
@@ -660,6 +664,12 @@ int tx_set_sample_format(uint16_t lane, iq_sample_format_e format) {
     else
         upscalefactor[lane] = 1.0f;
     return lime_Result_Success;
+}
+
+int tx_get_oversampling(uint16_t channel) {
+    if (channel >= TX_CHANNEL_COUNT)
+        return lime_Result_InvalidValue;
+    return tx_channel_cfg[channel].interpolate_pow2;
 }
 
 // @brief Aborts DAC DMA and drops all pending buffers
@@ -814,6 +824,7 @@ void tx_lane_prime(uint16_t lane) {
     dac_pipeline_t *const dac = &tx_dac[lane];
     memclr(&tx_stats, sizeof(tx_stats));
 
+    int_ratio_pow2[lane] = tx_channel_cfg[dac->channel].interpolate_pow2;
     tx_ddr_reset(ddr, ddr_read_buffer[lane]);
     tx_host_dma_reset(ddr);
 

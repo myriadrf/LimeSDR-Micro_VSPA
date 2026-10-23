@@ -11,6 +11,13 @@
 
 #include <stdint.h>
 
+#define TX_CHANNEL_COUNT 1
+
+// Persistent channel parameters, applied to the lane which streams the channel
+typedef struct TxChannelConfig {
+    uint16_t interpolate_pow2;
+} tx_channel_config_t;
+
 typedef struct TxBufferMetaData {
     uint32_t phytime;
     uint32_t flags;
@@ -49,6 +56,7 @@ typedef struct DAC_lane {
     uint16_t count_dmac_complete;
     uint16_t axi_fifo_index;
     uint16_t dma_channel;
+    uint16_t channel;
     uint32_t expected_end_phytime; // needed for terminating transmissions without timestamps
     uint32_t start_phytime; // phytime of the current transmission window's START
     uint32_t end_go_phytime; // phytime of the GO_1 event that closes the current transmission window
@@ -81,8 +89,10 @@ extern tone_state_t tx_tone_state[TX_MAX_LANE_COUNT];
 
 void transmitter_init(void);
 void tx_lane_setup(uint16_t lane, uint16_t channel);
-int tx_set_oversampling(uint16_t lane, uint16_t oversample_pow2);
 int tx_set_sample_format(uint16_t lane, iq_sample_format_e format);
+int tx_set_oversampling(uint16_t channel, uint16_t oversample_pow2);
+// @return channel's interpolation as power of 2, or negative lime_Result on error
+int tx_get_oversampling(uint16_t channel);
 
 void tx_lane_ddr_enable(uint16_t lane, bool enable);
 

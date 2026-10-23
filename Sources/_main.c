@@ -151,15 +151,15 @@ uint64_t HandleCommand(uint64_t msg64) {
         break;
     }
     case MBOX_OPC_RX_CONFIGURE: {
-        const uint8_t lane = msg_lsb & 0xFF;
+        const uint8_t channel = msg_lsb & 0xFF;
         const uint8_t ovr_pow2 = (msg_lsb >> 8) & 0xFF;
-        return (MAKEDWORD(0, rx_set_oversampling(lane, ovr_pow2)));
+        return (MAKEDWORD(0, rx_set_oversampling((e_rx_channel)channel, ovr_pow2)));
         break;
     }
     case MBOX_OPC_TX_CONFIGURE: {
-        const uint8_t lane = msg_lsb & 0xFF;
+        const uint8_t channel = msg_lsb & 0xFF;
         const uint8_t ovr_pow2 = (msg_lsb >> 8) & 0xFF;
-        return (MAKEDWORD(0, tx_set_oversampling(lane, ovr_pow2)));
+        return (MAKEDWORD(0, tx_set_oversampling(channel, ovr_pow2)));
         break;
     }
     case MBOX_OPC_SET_SAMPLE_FORMAT: {
@@ -168,6 +168,15 @@ uint64_t HandleCommand(uint64_t msg64) {
         const bool tx = msg_lsb & (1 << 16);
         return (MAKEDWORD(0, tx ? tx_set_sample_format(lane, format) : rx_set_sample_format(lane, format)));
         break;
+    }
+    case MBOX_OPC_RX_GET_CONFIG:
+    case MBOX_OPC_TX_GET_CONFIG: {
+        const uint8_t channel = msg_lsb & 0xFF;
+        const int ovr_pow2 =
+            op_code == MBOX_OPC_RX_GET_CONFIG ? rx_get_oversampling((e_rx_channel)channel) : tx_get_oversampling(channel);
+        if (ovr_pow2 < 0)
+            return (MAKEDWORD(0, ovr_pow2));
+        return (MAKEDWORD(ovr_pow2, lime_Result_Success));
     }
     case MBOX_OPC_SINGLE_TONE_TX: {
         const uint8_t lane = msg_lsb & 0xFF;
