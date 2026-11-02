@@ -13,6 +13,7 @@
 #include "vspa_iqstream.h"
 #include "phytimer.h"
 #include "proxy_data.h"
+#include "nco_correlator.h"
 
 #include "ditfft.h"
 
@@ -444,8 +445,63 @@ void rx_lane_stop(uint16_t lane) {
 
 extern void ProcessTxDMA(void);
 
-cfixed16_t *capture_adc(uint16_t channel) {
-    return 0;
+// Host reads the combined value of nco_hann_combine()
+static nco_correlator_t hann_terms[NCO_HANN_TERMS];
+cfloat32_t hann_sum;
+
+cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
+    uint16_t lane = 0;
+    rx_select_channel(lane, channel);
+
+    ProcessTxDMA(); // for Tx tone generation
+    rx_lane_prime(lane);
+    ProcessTxDMA(); // for Tx tone generation
+    initial_adc_enq(&rx_adc[lane].afe);
+    timer_trig_immediate(3, ePhyTimerComparatorOut1);
+    afe_pipeline_t *const afe = &rx_adc[lane].afe;
+
+    const uint16_t fft_size = ADC_XFER_SAMPLE_COUNT;
+    const uint16_t dma_mask = (1 << rx_adc[lane].afe.config.dma_channel);
+
+    ProcessTxDMA(); // for Tx tone generation
+    const uint16_t samples_per_loop = ADC_XFER_SAMPLE_COUNT;
+
+    fcw >>= rx_channel_cfg[VSPA_RX0].decimate_pow2; // adjust for host side expected sample rate
+    const uint32_t hann_bin_fcw = (0x80000000u / (fft_size >> 1)); // frequency offset of 1 DFT bin
+    memset16(hann_terms, 0, sizeof(hann_terms));
+
+    for (uint16_t i = 0; i < fft_size / samples_per_loop; ++i) {
+        volatile int16_t timeout = 2000;
+        while (!dmac_is_complete(dma_mask) && --timeout) {
+            ProcessTxDMA();
+        }
+        if (timeout == 0)
+            break;
+
+        axiq_fifo_errors(afe);
+        dmac_clear_complete(dma_mask);
+
+        cfixed16_t *const completed_buffer = afe_next_complete_buffer(afe);
+        ++afe->count_dmac_complete;
+
+        // work
+        rx_qec_correction(completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
+        nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw, &hann_terms[0]);
+        nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw - hann_bin_fcw, &hann_terms[1]);
+        nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw + hann_bin_fcw, &hann_terms[2]);
+
+        dmac_enable(afe->config.dmac_ctrl_flags | DMAC_PEND_EXT, // flags
+                    ADC_XFER_SIZE_BYTES, // size
+                    afe->config.axi_fifo_addr, // axi addr
+                    VCPU_ADDR_FOR_DMA(completed_buffer) // dmem addr
+        );
+        ++afe->count_dmac_enque;
+    }
+    rx_lane_stop(lane);
+
+    nco_hann_combine(hann_terms, &hann_sum);
+
+    return &hann_sum;
 }
 
 // On first TCD enqueues initial DMA transfers for further self triggering

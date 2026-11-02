@@ -62,7 +62,7 @@ void rx_stream_started(void);
 void adc_dma_complete(uint16_t lane);
 void rx_ddr_dma_complete(uint16_t lane);
 
-cfixed16_t *capture_adc(uint16_t channel);
+cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw);
 void host_submitted_rx_tcd(uint16_t lane);
 
 #endif /* IQMOS_RX_H_ */

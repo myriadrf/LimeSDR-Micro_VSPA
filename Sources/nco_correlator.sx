@@ -1,0 +1,237 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright 2026 Lime Microsystems
+
+#include "vspa.h"
+
+    .section .text.nco_correlate
+
+// void nco_correlate(const cfixed16_t *samples, uint16_t dmem_lines, uint32_t freq_ctrl_word, nco_correlator_t *state);
+//
+// Measures one frequency over dmem_lines DMEM lines (32 complex samples each) by mixing the samples with the hardware
+// NCO and summing them:
+//
+//   sum += x[n] * exp(-j * 2pi * freq_ctrl_word * phase / 2^32), phase = state->phase + n
+//
+// A tone x[n] = A * exp(j * 2pi * freq_ctrl_word * n / 2^32) adds N * A, where samples are scaled to full scale = 1.0.
+// Uses no stack and writes only to *state.
+//
+// The load stage runs ahead of the last sample by 3 DMEM lines, so a0 is in modulo mode for the duration of the loop:
+// those extra loads wrap to the start of samples instead of reading past the end, and their values are ignored.
+//
+// Arguments:
+// a0: samples, must be DMEM line aligned
+// g0: dmem_lines, must not be 0 (the hardware loop treats a count of 0 as 65536)
+// g1: freq_ctrl_word
+// a1: state, in/out. Set to 0 before the first block; the block can then be split across several calls.
+//
+// Clobbers: a0, g1, g3, g4, R0, R1, R2, R3, R4, VRA pointers, source modes, precision, NCO registers.
+// range_a0 is restored to linear addressing.
+//
+// VRA layout:
+// R0, R1:  samples. Only the low halves are used: R0 = samples 0..15 of a line, R1 = samples 16..31.
+//          Loading the half that is not being read avoids relying on the half select pointer bit, which the manual
+//          documents inconsistently, and on a read and a load of the same register in one cycle.
+// R2:      per AU lane sums, 16 complex floats
+// R3[0:1]: sum from the previous call
+// R4[0:1]: total
+//
+// rS0: {R0, R1}, incr 1 register
+//
+// The next phase is computed rather than read back from nco_phase, which is a look-ahead value that also includes the
+// extra "rd S1"s issued after the last sample. Takes 2 cycles per line, plus a fixed cost per call.
+#define NCO_SAMPLES_PER_LINE_LOG2 5 // 32 samples = 2 * __AU_COUNT__
+#define NCO_HALF_WORDS_PER_LINE_LOG2 6 // 64 half words = 32 samples
+#define NCO_HALF_LINE_HALF_WORDS 32
+
+    .global _nco_correlate
+    .type _nco_correlate, @function
+    .size _nco_correlate, _nco_correlate_end - _nco_correlate
+_nco_correlate:
+    ld g4, [a1]+0;                                  // g4 = start phase, valid after 3 more instructions
+    clr.VRA;
+    set.prec half_fixed, single, single, single, single; // must precede set.nco, NCO output is single precision only
+    set.nco normal, 0x1, 0;                         // "normal" = 16 complex samples per "rd S1"; clears nco_phase
+    mv nco_freq, g1;                                // measured: nco_freq = f generates exp(-j*2pi*f*n/2^32), which
+                                                    // mixes down; the manual's NCO formula has the opposite sign
+    sl g3, g0, NCO_SAMPLES_PER_LINE_LOG2;
+    add g3, g3, g4;
+    st [a1]+2, g3;                                  // a1 = &state->sum
+    mv nco_phase, g4;                               // swaps g4 with the phase accumulator
+    ld g3, [a1]+2;                                  // g3 = sum.real
+    ld g4, [a1]-2;                                  // g4 = sum.imag
+
+    set.VRAincr rV, 2;                              // 1 full word
+    set.VRAptr rV, 3*_VR;
+    nop;
+    mv.w [rV], g3;
+    mv.w [rV], g4;
+
+    set.VRAincr rV, 0;
+    set.VRAptr rV, 2*_VR;
+    set.VRAincr rS0, _VR;
+    set.VRArange1 rS0, 0, _VR;
+    set.VRAptr rS0, _VR;                            // the "rd S0" of the zero operation below moves it on to R0
+    add a0, NCO_HALF_LINE_HALF_WORDS;               // a0[5:0] is the split point of ld.l2l and ld.h2l: 0 would make
+                                                    // ld.l2l load nothing and ld.h2l load the whole line
+    sl g3, g0, NCO_HALF_WORDS_PER_LINE_LOG2;
+    set.range a0, a0, g3;                           // samples is a modulo buffer of dmem_lines, in half words
+
+    // Each stage runs every cycle, offset from the previous stage:
+    //   ld.laddr to ld.<mode> takes 3 cycles, ld.<mode> to the "rd S0" of the same half takes 1, and rd to cmac takes 2.
+    // Only cmad and cmac have to be exact, so the extra reads and loads in the last loop iterations are harmless.
+    // The first AU operation multiplies by zero, which starts the accumulators from 0 without a special first cmac.
+    ld.laddr [a0]+0;
+    ld.laddr [a0]+1;
+    ld.laddr [a0]+0;                setB.loop g0, NCO_CORR_LOOP_START, NCO_CORR_LOOP_END;
+    ld.laddr [a0]+1;    ld.l2l R0;  rd S0;  rd S1;  rd S2;          set.Smode S0zeros, S1cplx1, S2zeros;
+    ld.laddr [a0]+0;    ld.h2l R1;  rd S0;  rd S1;                  set.Smode S0hlinecplx, S1nco;
+    ld.laddr [a0]+1;    ld.l2l R0;  rd S0;  rd S1;  cmad;
+NCO_CORR_LOOP_START:
+    ld.laddr [a0]+0;    ld.h2l R1;  rd S0;  rd S1;  cmac;           loop_begin;
+NCO_CORR_LOOP_END:
+    ld.laddr [a0]+1;    ld.l2l R0;  rd S0;  rd S1;  cmac;           loop_end;
+
+    mv a0, 0;
+    set.range a0, a0, 0;                            // base and size 0 = linear addressing, the range outlives this function
+    nop;
+    wr.hlinecplx;
+
+    // Sum the 16 lanes and the previous sum: every element in turn is duplicated to all lanes and accumulated, so that
+    // lane 0 of the result holds the total.
+    set.prec single, single, single, single, single;
+    clr.VRA;
+    set.VRAptr rS0, 2*_VR;
+    set.VRAincr rS0, 4;                             // 1 complex float, runs from R2[0] on to R3[0]
+    set.VRAptr rV, 4*_VR;
+    nop;
+    rd S0;  rd S1;  rd S2;          set.Smode S0word, S1cplx1, S2zeros;
+    rd S0;
+    rd S0;  cmad;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    rd S0;  cmac;
+    cmac;
+    cmac;
+    nop;
+    nop;
+    nop;
+    wr.hlinecplx;
+
+    set.VRAptr rS0, 4*_VR;
+    set.VRAincr rS0, 2;
+    nop;
+    mv.w g3, [rS0];
+    mv.w g4, [rS0];
+    nop;
+    st [a1]+2, g3;
+    st [a1]-4, g4;                                  // a1 = state
+
+    rts;
+    nop;
+    nop;
+_nco_correlate_end:
+
+    .section .text.nco_hann_combine
+
+// void nco_hann_combine(const nco_correlator_t *terms, cfloat32_t *out);
+//
+// *out = terms[0].sum - (terms[1].sum + terms[2].sum) / 2, see nco_correlator.h. The VCPU has no scalar float arithmetic
+// and the compiler's soft float library does not fit in PRAM.
+//
+// Arguments:
+// a0: terms
+// a1: out
+//
+// Clobbers: a0, g3, g4, R0, R1, R2, R4, VRA pointers, source modes, precision.
+//
+// VRA layout:
+// R0[0:5]: terms[0..2].sum
+// R1[0:1]: {1, 0}
+// R2[0:1]: {-0.5, 0}
+// R4[0:1]: result, only AU lane 0 is meaningful
+//
+// rS1: R1, then stays on R2
+#define NCO_FLOAT_ONE 0x3F800000
+#define NCO_FLOAT_MINUS_HALF 0xBF000000
+#define NCO_STATE_SUM_OFFSET 2  // half words, phase
+#define NCO_STATE_NEXT_SUM 4    // half words, from sum.imag to the sum.real of the next term
+
+    .global _nco_hann_combine
+    .type _nco_hann_combine, @function
+    .size _nco_hann_combine, _nco_hann_combine_end - _nco_hann_combine
+_nco_hann_combine:
+    clr.VRA;
+    set.prec single, single, single, single, single;
+    add a0, NCO_STATE_SUM_OFFSET;
+    set.VRAincr rV, 2;                              // 1 full word
+
+    // A load is valid after 3 more instructions, the setup below fills those delay slots
+    ld g3, [a0]+2;
+    ld g4, [a0]+NCO_STATE_NEXT_SUM;
+    clr R1;
+    clr R2;
+    set.VRAincr rS0, 4;                             // 1 complex float
+    mv.w [rV], g3;
+    mv.w [rV], g4;
+    ld g3, [a0]+2;
+    ld g4, [a0]+NCO_STATE_NEXT_SUM;
+    set.VRAptr rS0, 0;
+    set.VRAincr rS1, _VR;
+    set.VRArange1 rS1, 2*_VR, 2*_VR;
+    mv.w [rV], g3;
+    mv.w [rV], g4;
+    ld g3, [a0]+2;
+    ld g4, [a0]+0;
+    set.VRAptr rS1, 1*_VR;
+    nop;
+    nop;
+    mv.w [rV], g3;
+    mv.w [rV], g4;
+
+    mv g3, NCO_FLOAT_ONE;
+    mv g4, NCO_FLOAT_MINUS_HALF;
+    set.VRAptr rV, 1*_VR;
+    nop;
+    mv.w [rV], g3;
+    set.VRAptr rV, 2*_VR;
+    nop;
+    mv.w [rV], g4;
+
+    set.VRAincr rV, 0;
+    set.VRAptr rV, 4*_VR;
+
+    // S0 duplicates each sum to all AU lanes, S1 lane 0 holds its gain. rd to cmac takes 2 cycles, cmac to wr takes 4.
+    rd S0;  rd S1;  rd S2;  set.Smode S0word, S1hlinecplx, S2zeros;
+    rd S0;  rd S1;
+    rd S0;  rd S1;  cmad;
+    cmac;
+    cmac;
+    nop;
+    nop;
+    nop;
+    wr.hlinecplx;
+
+    set.VRAptr rS0, 4*_VR;
+    set.VRAincr rS0, 2;
+    nop;
+    mv.w g3, [rS0];
+    mv.w g4, [rS0];
+    nop;
+    st [a1]+2, g3;
+    st [a1]+0, g4;
+
+    rts;
+    nop;
+    nop;
+_nco_hann_combine_end:

@@ -20,6 +20,7 @@ set(COMMON_IQPLAYER_SOURCE
     phytimer.c
     proxy_data.c
     conversion.sx
+    nco_correlator.sx
     tone_generator.sx
 )
 
@@ -27,6 +28,7 @@ set(COMMON_IQPLAYER_SOURCE
 set_source_files_properties(
     crt0.s
     conversion.sx
+    nco_correlator.sx
     tone_generator.sx
     PROPERTIES LANGUAGE C
 )
