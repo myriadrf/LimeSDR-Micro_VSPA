@@ -22,7 +22,7 @@ lime_Result proxy_set_address(uint32_t la9310_mem_addr) {
     return lime_Result_Success;
 }
 
-void proxy_clear(void) { memclr(&proxy, sizeof(proxy)); }
+void proxy_clear(void) { memset16(&proxy, 0, sizeof(proxy)); }
 
 void proxy_post(void) {
     TRACE_START_DURATION(t1);

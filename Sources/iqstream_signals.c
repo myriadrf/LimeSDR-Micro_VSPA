@@ -14,7 +14,7 @@ void HandleCommandFlags(void) {
         if (flags & (HTV_SIGNAL_RXLANE0_PRIME << lane))
             rx_lane_prime(lane);
 
-        if (flags & rx_ddr[lane].dma.htv_tcd_pending_flag_mask) {
+        if (flags & rx_ddr[lane].ddr.dma.htv_tcd_pending_flag_mask) {
             host_submitted_rx_tcd(lane);
         }
     }
@@ -24,7 +24,7 @@ void HandleCommandFlags(void) {
         if (flags & (HTV_SIGNAL_TXLANE0_PRIME << lane))
             tx_lane_prime(lane);
 
-        if (flags & txddr[lane].dma_hif.htv_tcd_pending_flag_mask) {
+        if (flags & txddr[lane].ddr.dma.htv_tcd_pending_flag_mask) {
             host_submitted_tx_tcd(lane);
         }
     }

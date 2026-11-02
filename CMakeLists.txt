@@ -22,6 +22,7 @@ add_compile_options(
     -opt=noalias_by_type
     -mvcpu
     -msgstyle gcc
+    -enum min
     $<$<CONFIG:Debug>:-g> # generate debug info
 )
 

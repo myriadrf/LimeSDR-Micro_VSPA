@@ -12,6 +12,7 @@
 #include "vcpu.h"
 
 #include "l1-trace.h"
+#include "vspa_iqstream.h"
 
 #define PHY_TMR_DMA_CHAN DDR_WR_DMA_CHANNEL_5
 #define PHY_TMR_DMA_CHAN_MASK (1 << PHY_TMR_DMA_CHAN)
@@ -59,10 +60,11 @@ static uint32_t scratch_buf_addrs[10] = { 0 };
 static uint32_t scratch_buf_values[10] = { 0 };
 
 uint32_t timer_trig_immediate_async(uint32_t id, enum ePhyTimerComparatorTrigger trigger) {
-    WAIT_TIMEOUT_R(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
     if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
         return 0;
 
+    dmac_clear_errcfg(PHY_TMR_DMA_CHAN_MASK);
     dmac_clear_complete(PHY_TMR_DMA_CHAN_MASK);
     scratch_buf_addrs[0] = PHY_TMR_SC_ADDR(id);
     scratch_buf_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
@@ -78,12 +80,12 @@ uint16_t timer_trig_immediate(uint32_t id, enum ePhyTimerComparatorTrigger trigg
     if (!dmamask)
         return 0;
 
-    WAIT_TIMEOUT_R(dmac_is_complete(dmamask), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(dmac_is_complete(dmamask), VSPA_DEFAULT_TIMEOUT);
     return dmamask;
 }
 
 uint16_t timer_trig_schedule_async(uint32_t id, enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp) {
-    WAIT_TIMEOUT_R(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
     if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
         return 0;
 
@@ -104,12 +106,12 @@ uint16_t timer_trig_schedule(uint32_t id, enum ePhyTimerComparatorTrigger trigge
     if (!dmamask)
         return 0;
 
-    WAIT_TIMEOUT_R(dmac_is_complete(dmamask), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(dmac_is_complete(dmamask), VSPA_DEFAULT_TIMEOUT);
     return dmamask;
 }
 
 void stream_trig_schedule_async(enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp) {
-    WAIT_TIMEOUT_R(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
     if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
         return;
 
@@ -140,11 +142,11 @@ void stream_trig_schedule_async(enum ePhyTimerComparatorTrigger trigger, uint32_
 
     dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 9, VSPA_HALF_WORDS(scratch_buf_addrs), VSPA_HALF_WORDS(scratch_buf_values));
 
-    WAIT_TIMEOUT_R(dmac_is_complete(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(dmac_is_complete(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
 }
 
 void timers_trig_schedule(const uint16_t *timer_ids, const uint16_t *triggers, const uint32_t *phytimes, uint16_t count) {
-    WAIT_TIMEOUT_R(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
     if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
         return;
 
@@ -162,5 +164,5 @@ void timers_trig_schedule(const uint16_t *timer_ids, const uint16_t *triggers, c
         ++regCount;
     }
     dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, regCount, VSPA_HALF_WORDS(scratch_buf_addrs), VSPA_HALF_WORDS(scratch_buf_values));
-    WAIT_TIMEOUT_R(dmac_is_complete(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(dmac_is_complete(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
 }

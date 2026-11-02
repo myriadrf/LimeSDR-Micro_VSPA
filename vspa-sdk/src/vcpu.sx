@@ -170,6 +170,48 @@ _memclrend:
 _memclr_end:
 _memclrcirc_end:
 
+// -----------------------------------------------------------------------------
+//  void memset16circ(void *s, int c, size_t n, void *b, size_t s)
+//  void memset16(void *s, int c, size_t n)
+//
+//  Set half words in data memory.
+//
+//  Parameters:
+//      a0  data memory address.
+//      a1  circular buffer base address.
+//      g0  value to set.
+//      g1  number of half words to set.
+//      g2  number of half words in circular buffer.
+//
+//  Return value:
+//      This function does not return a value.
+//
+//  Clobbered registers:
+//      a0, a1
+// -----------------------------------------------------------------------------
+
+    .global     _memset16circ
+    .type       _memset16circ, %function
+    .size       _memset16circ, _memset16circ_end - _memset16circ
+
+    .global     _memset16
+    .type       _memset16, %function
+    .size       _memset16, _memset16_end - _memset16
+
+    .section    .text.vcpu.memset16circ, "ax", %progbits
+
+_memset16circ:
+    set.range   a0, a1, g2
+_memset16:
+    set.loop    g1, 1
+    fnop
+    sth         [a0]+SIZEMAU, g0; loop_begin; loop_end;
+    rts
+    mv          a1, 0
+    set.range   a0, a1, 0
+_memset16_end:
+_memset16circ_end:
+
 #else  // ___VSPA2__
 
 // -----------------------------------------------------------------------------

@@ -8,6 +8,8 @@
 #include "vcpu.h"
 #include "vspa_dma_hif.h"
 #include "tone_generator.h"
+#include "afe_pipeline.h"
+#include "ddr_pipeline.h"
 
 #include <stdint.h>
 
@@ -32,13 +34,8 @@ typedef struct TxBufferMetaData {
 #define TX_DDR_RING 6
 
 typedef struct TxDDR_lane {
-    vspa_dma_hif_t dma_hif;
-    cfixed16_t *base_buffer;
+    ddr_pipeline_t ddr; // its meta[] and wip_tcd are unused, Tx keeps its own meta ring
     tx_meta_t meta[TX_DDR_RING];
-    uint32_t count_dmac_enque;
-    uint32_t count_dmac_complete;
-    uint16_t dma_channel;
-    uint32_t buffers_consumed;
     uint16_t ready_buffer_offset;
     uint8_t enq_slot;      // ring slot of the next DDR read (count_dmac_enque mod TX_DDR_RING)
     uint8_t cpl_slot;      // ring slot of the next DDR read to complete (count_dmac_complete mod TX_DDR_RING)
@@ -48,14 +45,8 @@ typedef struct TxDDR_lane {
 static inline uint8_t tx_ddr_next_slot(uint8_t slot) { return slot + 1 == TX_DDR_RING ? 0 : slot + 1; }
 
 typedef struct DAC_lane {
-    cfixed16_t *base_buffer;
-    uint32_t axi_fifo_addr;
+    afe_pipeline_t afe;
     tx_meta_t meta[2];
-    uint16_t buffers_provided;
-    uint16_t count_dmac_enque;
-    uint16_t count_dmac_complete;
-    uint16_t axi_fifo_index;
-    uint16_t dma_channel;
     uint16_t channel;
     uint32_t expected_end_phytime; // needed for terminating transmissions without timestamps
     uint32_t start_phytime; // phytime of the current transmission window's START
@@ -101,7 +92,7 @@ void tx_lane_abort(uint16_t lane);
 
 void dac_dma_complete(uint16_t lane);
 void tx_ddr_complete(uint16_t lane);
-void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig);
+void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *tx, bool vcpu_trig);
 
 int tx_tone_enable(uint16_t lane, bool enable);
 void host_submitted_tx_tcd(uint16_t lane);

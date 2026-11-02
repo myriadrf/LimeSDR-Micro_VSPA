@@ -142,24 +142,3 @@ void rf_update_iq_comp_params(structTXIQCompParams *params_ptr, uint32_t rst, ui
             params_ptr->dcOffset.imag = *((float *)&val);
     }
 }
-
-void rx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint32_t samplesCount) {
-    const uint32_t dmem_lines_count = 4 * samplesCount / DMEM_LINE_SIZE_BYTES;
-#ifdef RXIQCOMP2
-    txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_rx, dmem_lines_count);
-#else
-#ifdef RXIQCOMP
-    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &rxiqcompcfg_struct, dmem_lines_count);
-#endif
-#endif
-}
-
-void tx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint32_t samplesCount) {
-    const uint32_t dmem_lines_count = 4 * samplesCount / DMEM_LINE_SIZE_BYTES;
-#ifdef TXIQCOMP2
-    txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_tx, dmem_lines_count);
-#endif
-#ifdef TXIQCOMP
-    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &txiqcompcfg_struct, dmem_lines_count);
-#endif
-}

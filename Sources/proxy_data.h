@@ -7,7 +7,7 @@
 #include <stdbool.h>
 
 // time non critical data that's periodically posted to host memory
-// Host could poll them without needlesly increasing load on AXI bus.
+// Host could poll them from it's own memory without needlesly increasing load on AXI bus.
 typedef struct Proxy_Data {
     uint32_t rx_dma_done;
     uint32_t tx_dma_done;

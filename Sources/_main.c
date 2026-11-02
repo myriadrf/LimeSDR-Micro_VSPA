@@ -30,8 +30,8 @@ extern void rf_iq_comp_params_init(void);
 
 struct VSPA_Stats vspa_core_stats;
 
-bool first_run = true;
-inline void HostMBox0Post(uint64_t msg64) { host_mbox0_post(msg64); }
+static bool first_run = true;
+static inline void HostMBox0Post(uint64_t msg64) { host_mbox0_post(msg64); }
 
 void setup(void) {
     uint64_t msg64 = 0;
@@ -70,7 +70,7 @@ void setup(void) {
     host_mbox1_enable();
 }
 
-__attribute__((noreturn)) static void terminate(void) __noreturn {
+__attribute__((noreturn)) static inline void terminate(void) __noreturn {
     // Control register:
     iowr(CONTROL, 0x00F000A2, 0x0FF01AA3); // disable all GOs
     iowr(DMA_STAT_ABORT, 0xFFFFFFFF);
@@ -89,17 +89,17 @@ __attribute__((noreturn)) static void terminate(void) __noreturn {
 
     // AXI slave interface:
     // Disable AXI slave events.
-    iowr(AXISLV_GOEN1, 0);
-    iowr(AXISLV_GOEN0, 0);
+    // iowr(AXISLV_GOEN1, 0);
+    // iowr(AXISLV_GOEN0, 0);
     // Clear all AXI slave flags
-    iowr(AXISLV_FLAGS0, 0xFFFFFFFF);
-    iowr(AXISLV_FLAGS1, 0xFFFFFFFF);
+    // iowr(AXISLV_FLAGS0, 0xFFFFFFFF);
+    // iowr(AXISLV_FLAGS1, 0xFFFFFFFF);
 
     // DMA engine:
     while (iord(DMA_XRUN_STAT)) {
     }
-    iowr(DMA_XFRERR_STAT, 0xFFFFFFFF);
-    iowr(DMA_CFGERR_STAT, 0xFFFFFFFF);
+    // iowr(DMA_XFRERR_STAT, 0xFFFFFFFF);
+    // iowr(DMA_CFGERR_STAT, 0xFFFFFFFF);
     iowr(DMA_COMP_STAT, 0xFFFFFFFF);
     iowr(DMA_GO_STAT, 0xFFFFFFFF);
 
@@ -116,7 +116,7 @@ __attribute__((noreturn)) static void terminate(void) __noreturn {
     __builtin_done();
 }
 
-__attribute__((noreturn)) void SwReset(void) __noreturn {
+static inline __attribute__((noreturn)) void SwReset(void) __noreturn {
 
     HostMBox0Post(MAKEDWORD(0x0, 0x1));
     axiq_rx_disable();
@@ -126,7 +126,7 @@ __attribute__((noreturn)) void SwReset(void) __noreturn {
 
 uint32_t stream_origin_phyticks = 0;
 
-static void stream_start_now(void) {
+static inline void stream_start_now(void) {
     const uint32_t phytime_now = gpird(4); // Phytimer
     stream_origin_phyticks = phytime_now + 256;
     stream_trig_schedule_async(ePhyTimerComparatorOut1, stream_origin_phyticks);
@@ -139,9 +139,6 @@ uint64_t HandleCommand(uint64_t msg64) {
     const mbox_opc_e op_code = (mbox_opc_e)((HIWORD(msg64) & 0xFF000000) >> 24);
     const uint32_t msg_msb = HIWORD(msg64);
     const uint32_t msg_lsb = LOWORD(msg64);
-
-    const uint32_t fifo_size = (msg_msb & 0x0000FFFF) * 4096;
-    const uint32_t fifo_addr = msg_lsb;
 
     switch (op_code) {
     case MBOX_OPC_RX_CHAN_SELECT: {
@@ -214,11 +211,6 @@ uint64_t HandleCommand(uint64_t msg64) {
     case MBOX_OPC_GET_FEATURES_MAP: {
         return (MAKEDWORD(VSPA_HALF_WORDS(features_map), lime_Result_Success));
     }
-    case MBOX_OPC_RX_FFT: {
-        const uint16_t channel = msg_lsb & 0xFF;
-        const uint32_t output_address = (uint32_t)rx_fft(channel);
-        return (MAKEDWORD(VSPA_HALF_WORDS(output_address), lime_Result_Success));
-    }
     case MBOX_OPC_ADC_CAPTURE: {
         const uint16_t channel = msg_lsb & 0xFF;
         const uint32_t output_address = (uint32_t)capture_adc(channel);
@@ -269,7 +261,7 @@ static void BootEntry(void) {
     // entry(main);
 }
 
-inline void ProcessMBox(void) {
+static inline void ProcessMBox(void) {
     if (vspa_mbox0_is_valid()) // message from Host
     {
         const uint64_t cmd = host_mbox0_read();
@@ -314,6 +306,10 @@ __attribute__((noreturn)) void main(void) {
         entry(main);
         first_run = false;
 
+        iowr(IRQEN, (1 << 4) | (1 << 2) // irqen_dma_cmp, irqen_flags0
+             ,
+             (1 << 4) | (1 << 2));
+
         receiver_init();
         transmitter_init();
     }
@@ -343,7 +339,7 @@ __attribute__((noreturn)) void main(void) {
         ProcessTxDMA();
 
         for (int lane = 0; lane < RX_MAX_LANE_COUNT; ++lane) {
-            if (dmac_event(1 << rx_adc[lane].dma_channel))
+            if (dmac_event(1 << afe_dma_channel(&rx_adc[lane].afe)))
                 adc_dma_complete(lane);
         }
         // if (compl & (1<<0))

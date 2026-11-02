@@ -11,9 +11,6 @@
 #include "dma_common.h"
 #include "iqstream_signals.h"
 
-#include "axiq-la9310.h"
-#include "vcpu.h"
-
 #include "opstatus.h"
 #include "vspa_iqstream.h"
 #include "phytimer.h"
@@ -25,12 +22,11 @@
 #define TX_DAC_FIFO_BEAT_COUNT 16
 #define dac_axi_fifo_addr (0x4400B000) // + 0x1000 - TX_DAC_FIFO_BEAT_COUNT * 16) // axi_DAC_FIFO_addr
 
-#define XFER_SAMPLES 512
-
-#define DAC_XFER_SAMPLE_COUNT XFER_SAMPLES
+#define DAC_XFER_SAMPLE_COUNT AXIQ_XFER_SAMPLES_COUNT
 #define DAC_XFER_SIZE_BYTES (DAC_XFER_SAMPLE_COUNT * 4)
+#define DAC_DMEM_LINES_COUNT (DAC_XFER_SIZE_BYTES / 128)
 
-#define DDR_XFER_SAMPLE_COUNT XFER_SAMPLES
+#define DDR_XFER_SAMPLE_COUNT AXIQ_XFER_SAMPLES_COUNT
 #define DDR_XFER_SIZE_BYTES (DDR_XFER_SAMPLE_COUNT * 4)
 
 extern uint32_t stream_origin_phyticks;
@@ -75,7 +71,7 @@ struct TxWindowStats {
 // The DAC start/end/stop schedules write the comparators with a raw DMA on PHY_TMR_DMA_CHAN, the channel the
 // timer_trig_*() helpers use as well. dmac_enable() on a channel that is still running is lost, so wait for it.
 static inline void phytmr_dma_wait_free(void) {
-    WAIT_TIMEOUT_R(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+    WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
     if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
         ++tx_window_stats.phytmr_busy;
 }
@@ -89,48 +85,30 @@ uint16_t int_ratio_pow2[TX_MAX_LANE_COUNT] = { 0 }; // copy of the lane's channe
 
 static tx_channel_config_t tx_channel_cfg[TX_CHANNEL_COUNT];
 
-static inline uint32_t phytime_now(void) { return gpird(4); }
-
-static inline uint16_t ddr_buffers_in_use(const tx_ddr_pipeline_t *pipe) { return pipe->count_dmac_enque - pipe->buffers_consumed; }
-
-static inline uint16_t ddr_buffers_ready(const tx_ddr_pipeline_t *pipe) {
-    return pipe->count_dmac_complete - pipe->buffers_consumed;
-}
-static inline tx_meta_t *ddr_next_enq_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->enq_slot]; }
-static inline tx_meta_t *ddr_next_completed_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->cpl_slot]; }
-static inline cfixed16_t *ddr_current_ready_buffer(const tx_ddr_pipeline_t *pipe) {
-    return pipe->base_buffer + pipe->consumed_slot * DDR_XFER_SAMPLE_COUNT;
+static inline tx_meta_t *tx_ddr_next_enq_meta(tx_ddr_pipeline_t *tx) { return &tx->meta[tx->enq_slot]; }
+static inline tx_meta_t *tx_ddr_next_completed_meta(tx_ddr_pipeline_t *tx) { return &tx->meta[tx->cpl_slot]; }
+static inline cfixed16_t *tx_ddr_current_ready_buffer(const tx_ddr_pipeline_t *tx) {
+    return tx->ddr.base_buffer + tx->consumed_slot * DDR_XFER_SAMPLE_COUNT;
 }
 
-static tx_meta_t *ddr_current_ready_meta(tx_ddr_pipeline_t *pipe) { return &pipe->meta[pipe->consumed_slot]; }
+static tx_meta_t *tx_ddr_current_ready_meta(tx_ddr_pipeline_t *tx) { return &tx->meta[tx->consumed_slot]; }
 
 static inline bool is_tx_dma_allowed(void) { return (gpird(1, 1 << 16)); }
-static inline uint16_t dac_buffers_ready(const dac_pipeline_t *pipe) { return pipe->buffers_provided - pipe->count_dmac_enque; }
 
 static inline uint32_t ts_to_phytime(uint32_t ts, uint16_t oversample_pow2) {
     return (ts << oversample_pow2) >> dac_clock_divider_disabled;
 }
 
-static inline cfixed16_t *ddr_next_enq_buffer(const tx_ddr_pipeline_t *pipe) {
+static inline cfixed16_t *tx_ddr_next_enq_buffer(const tx_ddr_pipeline_t *tx) {
     // TODO: use modulo buffer registers for circular addressing?
-    return pipe->base_buffer + pipe->enq_slot * DDR_XFER_SAMPLE_COUNT;
+    return tx->ddr.base_buffer + tx->enq_slot * DDR_XFER_SAMPLE_COUNT;
 }
 
-static inline uint16_t dac_buffers_in_use(const dac_pipeline_t *pipe) { return pipe->buffers_provided - pipe->count_dmac_complete; }
+static inline tx_meta_t *dac_next_enq_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->afe.count_dmac_enque & 0x1]; }
 
-static inline cfixed16_t *dac_next_enq_buffer(dac_pipeline_t *pipe) {
-    return pipe->base_buffer + (pipe->count_dmac_enque & 0x1) * DAC_XFER_SAMPLE_COUNT;
-}
+static inline tx_meta_t *dac_next_free_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->afe.buffers_prepared & 0x1]; }
 
-static inline tx_meta_t *dac_next_enq_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_enque & 0x1]; }
-
-static cfixed16_t *dac_next_free_buffer(const dac_pipeline_t *pipe) {
-    return pipe->base_buffer + (pipe->buffers_provided & 0x1) * DAC_XFER_SAMPLE_COUNT;
-}
-
-static inline tx_meta_t *dac_next_free_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->buffers_provided & 0x1]; }
-
-static inline tx_meta_t *dac_next_complete_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->count_dmac_complete & 0x1]; }
+static inline tx_meta_t *dac_next_complete_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->afe.count_dmac_complete & 0x1]; }
 
 static inline void schedule_dac_start(const tx_tdd_config_t *tdd, uint32_t phytime) {
     phytmr_dma_wait_free();
@@ -178,7 +156,7 @@ const float tx_filter_taps_upsampling_x4[128] _VSPA_VECTOR_ALIGN = {
 #include "fir_interpolation_x4.txt"
 };
 
-static inline void dac_stop_immediate() {
+static void dac_stop_immediate() {
     phytmr_dma_wait_free();
     tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
     tx_timer_values[1] = ePhyTimerComparatorOut0 << 2;
@@ -186,14 +164,14 @@ static inline void dac_stop_immediate() {
 }
 
 // @brief Attempt to enque all available DDR buffers (free ring slots, at most MAX_DMA_ENQ reads in flight)
-static inline void tx_initial_ddr_enque(uint16_t lane) {
-    tx_ddr_pipeline_t *const ddr = &txddr[lane];
+static void tx_initial_ddr_enque(tx_ddr_pipeline_t *tx) {
+    ddr_pipeline_t *const ddr = &tx->ddr;
     for (int i = 0; i < TX_DDR_RING; ++i) {
-        const uint16_t in_use = ddr_buffers_in_use(ddr);
-        if (in_use >= TX_DDR_RING || (uint16_t)(ddr->count_dmac_enque - ddr->count_dmac_complete) >= MAX_DMA_ENQ)
+        const uint16_t in_use = ddr_tx_buffers_in_use(ddr);
+        if (in_use >= TX_DDR_RING || ddr_xfer_in_flight(ddr) >= MAX_DMA_ENQ)
             break;
-        tx_lane_try_ddr_enqueue(ddr, true);
-        if (ddr_buffers_in_use(ddr) == in_use)
+        tx_lane_try_ddr_enqueue(tx, true);
+        if (ddr_tx_buffers_in_use(ddr) == in_use)
             break; // nothing queued by the host
     }
 }
@@ -211,43 +189,31 @@ static inline bool tx_axiq_is_enabled() {
 }
 
 static void tx_dac_reset(dac_pipeline_t *dac, cfixed16_t *buffer) {
-    dac->base_buffer = buffer;
-    dac->buffers_provided = 0;
-    dac->count_dmac_enque = 0;
-    dac->count_dmac_complete = 0;
+    afe_pipe_reset(&dac->afe, buffer); // also clears the DMA channel's status bits
+
     dac->expected_end_phytime = 0;
     dac->in_progress = false;
     dac->end_scheduled = false;
     dac->end_deferred = false;
     dac->force_start = false;
-    memclr(dac->meta, sizeof(dac->meta));
-
-    axiq_fifo_tx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)dac->axi_fifo_index, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-    axiq_fifo_tx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)dac->axi_fifo_index, AXIQ_CR_CLRERR, 0);
-
-    // reset dma
-    const uint32_t dma_mask = (1 << dac->dma_channel);
-    dma_clear_all_bits(dma_mask);
+    memset16(dac->meta, 0, sizeof(dac->meta));
 }
 
-static inline void tx_host_dma_reset(tx_ddr_pipeline_t *ddr) {
-    ddr->dma_hif.tcd_table.done = 0;
-    tcd_fifo_reset(&ddr->dma_hif.tcd_table);
+static void tx_host_dma_reset(tx_ddr_pipeline_t *tx) {
+    tx->ddr.dma.tcd_table.done = 0;
+    tcd_fifo_reset(&tx->ddr.dma.tcd_table);
     proxy.tx_dma_done = 0;
     proxy_dirty = true;
 }
 
-static void tx_ddr_reset(tx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
+static void tx_ddr_reset(tx_ddr_pipeline_t *tx, cfixed16_t *buffer) {
     timer_trig_immediate(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut0);
-    ddr->base_buffer = buffer;
-    ddr->count_dmac_enque = 0;
-    ddr->count_dmac_complete = 0;
-    ddr->buffers_consumed = 0;
-    ddr->enq_slot = ddr->cpl_slot = ddr->consumed_slot = 0;
-    ddr->ready_buffer_offset = 0;
-    memclr(ddr->meta, sizeof(ddr->meta));
+    ddr_pipe_reset(&tx->ddr, buffer);
+    tx->enq_slot = tx->cpl_slot = tx->consumed_slot = 0;
+    tx->ready_buffer_offset = 0;
+    memset16(tx->meta, 0, sizeof(tx->meta));
 
-    const uint32_t dma_mask = (1 << ddr->dma_channel);
+    const uint32_t dma_mask = (1 << tx->ddr.dma_channel);
     dmac_abort(dma_mask);
     WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
 
@@ -257,34 +223,34 @@ static void tx_ddr_reset(tx_ddr_pipeline_t *ddr, cfixed16_t *buffer) {
 // Configure pipline's persistent parameters
 void tx_lane_setup(uint16_t lane, uint16_t channel) {
     channel = 0; // TX has only 1 channel
-    memclr(&tx_stats, sizeof(tx_stats));
+    memset16(&tx_stats, 0, sizeof(tx_stats));
     tx_dac[lane].channel = channel;
-    tx_dac[lane].axi_fifo_addr = dac_axi_fifo_addr + (channel * 0x1000);
-    tx_dac[lane].axi_fifo_index = (enum axiq_fifo_e)(AXIQ_FIFO_TX0) + channel;
-    tx_dac[lane].dma_channel = TX_DAC_WR_DMA_CHANNEL + channel;
+
+    tx_axiq_fill_config(&tx_dac[lane].afe.config, channel);
     tx_dac_reset(&tx_dac[lane], dac_buffer[lane]);
 
     tx_tone_state[lane].amplitude = 0.9;
     tx_tone_state[lane].phase = 0;
-    tx_tone_state[lane].fcw = 8192;
+    tx_tone_state[lane].fcw = 0x7FFFFFFFu >> 2; // FS/8
 
-    txddr[lane].dma_channel = DDR_RD_DMA_CHANNEL_1; // + lane;
+    txddr[lane].ddr.dma_channel = DDR_RD_DMA_CHANNEL_1; // + lane;
     tx_ddr_reset(&txddr[lane], ddr_read_buffer[lane]);
     tx_host_dma_reset(&txddr[lane]);
 
-    memclr(int_history, sizeof(int_history));
+    memset16(int_history, 0, sizeof(int_history));
 }
 
-void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
+void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *tx, bool vcpu_trig) {
     TRACE_START_DURATION(t1);
+    ddr_pipeline_t *const ddr = &tx->ddr;
 
     if (txpipe[0].generate_tone)
         return;
     // ring full, or the DMA channel already has its maximum of reads in flight
-    if (ddr_buffers_in_use(ddr) >= TX_DDR_RING || (uint16_t)(ddr->count_dmac_enque - ddr->count_dmac_complete) >= MAX_DMA_ENQ)
+    if (ddr_tx_buffers_in_use(ddr) >= TX_DDR_RING || ddr_xfer_in_flight(ddr) >= MAX_DMA_ENQ)
         return;
 
-    const uint32_t tcd_count = tcd_fifo_size(&ddr->dma_hif.tcd_table);
+    const uint32_t tcd_count = tcd_fifo_size(&ddr->dma.tcd_table);
     TRACE_COUNTER(CNT_TX_TCD, tcd_count);
     if (tcd_count == 0) {
         if (is_tx_dma_allowed()) {
@@ -297,25 +263,24 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
     dma_tcd_t *tcd;
     tx_meta_t *ddr_meta;
     do {
-        tcd = tcd_fifo_front(&ddr->dma_hif.tcd_table);
+        tcd = tcd_fifo_front(&ddr->dma.tcd_table);
         // TODO: drop tcds that are already late
-        ddr_meta = ddr_next_enq_meta(ddr);
+        ddr_meta = tx_ddr_next_enq_meta(tx);
 
         // phytimer stream start offset will be applied right before scheduling.
         ddr_meta->phytime = ts_to_phytime(tcd->timestamp_lsb, int_ratio_pow2[0]);
 
-        const uint32_t ddr_advance = (ddr_meta->phytime + stream_origin_phyticks) - phytime_now();
-        TRACE_COUNTER(CNT_DDR_ENQ_ADVANCE, ddr_advance);
+        TRACE_COUNTER(CNT_DDR_ENQ_ADVANCE, (ddr_meta->phytime + stream_origin_phyticks) - phytime_now());
         break;
     } while (1);
 
-    cfixed16_t *const dest = ddr_next_enq_buffer(ddr);
+    cfixed16_t *const dest = tx_ddr_next_enq_buffer(tx);
     uint32_t xfer_size = DDR_XFER_SIZE_BYTES;
     if (tcd->size < DDR_XFER_SIZE_BYTES) {
         xfer_size = tcd->size;
         // host can send any amount of data, but internally it's processed in fixed size chunks.
         // clear residual data if host is not going to overwrite it all.
-        memclr(dest, DDR_XFER_SAMPLE_COUNT * sizeof(cfixed16_t));
+        memset16(dest, 0, DDR_XFER_SAMPLE_COUNT * sizeof(cfixed16_t));
     }
 
     iowr(DMA_DMEM_PRAM_ADDR, VCPU_ADDR_FOR_DMA(dest));
@@ -335,7 +300,7 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
 
     if (tcd->size == 0) {
         ddr_meta->flags |= IQSTREAM_DMA_TCD_END;
-        tcd_fifo_pop(&ddr->dma_hif.tcd_table);
+        tcd_fifo_pop(&ddr->dma.tcd_table);
     } else {
         ddr_meta->flags &= ~(IQSTREAM_IRQ | IQSTREAM_TRX_END); // not yet the end of packet
     }
@@ -359,7 +324,7 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
     TRACE_DMA_BEGIN(ddr->dma_channel, ddr->count_dmac_enque & 1);
 
     ++ddr->count_dmac_enque;
-    ddr->enq_slot = tx_ddr_next_slot(ddr->enq_slot);
+    tx->enq_slot = tx_ddr_next_slot(tx->enq_slot);
     ++tx_stats.dfe_enq;
     TRACE_COUNTER(CNT_TX_DDR_ENQ, ddr->count_dmac_enque - ddr->count_dmac_complete);
     TRACE_DURATION(T_DDR_RD_ENQ, DEFAULT_THREAD_ID, t1);
@@ -367,16 +332,17 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *ddr, bool vcpu_trig) {
 
 inline static void dac_enque(dac_pipeline_t *dac, cfixed16_t *buffer, uint32_t extra_dmac_flags) {
     TRACE_START_DURATION(t1);
-    if (!dmac_is_available(1 << dac->dma_channel)) {
+    afe_pipeline_t *const afe = &dac->afe;
+    if (!dmac_is_available(1 << afe_dma_channel(afe))) {
         ++tx_stats.afe_err;
     }
     // when tx_dma_allowed is not yet triggered, DAC will immediately start to output
     // the first sample value of enqueued buffer.It will appear as DC until DMA is triggered.
-    dmac_enable(dac->dma_channel | DMAC_WRC | DMAC_FIFO | DMAC_TRIG_VCPU | extra_dmac_flags, DAC_XFER_SIZE_BYTES,
-                dac->axi_fifo_addr, VCPU_ADDR_FOR_DMA(buffer));
-    TRACE_DMA_BEGIN(dac->dma_channel, dac->count_dmac_enque & 1);
+    dmac_enable(afe->config.dmac_ctrl_flags | DMAC_PEND_EXT | DMAC_TRIG_VCPU | extra_dmac_flags, DAC_XFER_SIZE_BYTES,
+                afe->config.axi_fifo_addr, VCPU_ADDR_FOR_DMA(buffer));
+    TRACE_DMA_BEGIN(afe_dma_channel(afe), afe->count_dmac_enque & 1);
 
-    ++dac->count_dmac_enque;
+    ++afe->count_dmac_enque;
     ++tx_stats.afe_enq;
     TRACE_DURATION(T_DAC_ENQ, DEFAULT_THREAD_ID, t1);
 }
@@ -426,6 +392,7 @@ static inline void dac_schedule_end(dac_pipeline_t *pipe, const tx_meta_t *dac_m
 
 static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
     tx_meta_t *const dac_meta = dac_next_enq_meta(pipe);
+    afe_pipeline_t *const afe = &pipe->afe;
     if (dac_meta->flags & IQSTREAM_TRX_START || pipe->force_start) {
         if (pipe->in_progress)
             return; // can't schedule new start while previous transmission did not reach end.
@@ -436,9 +403,7 @@ static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
             TRACE_COUNTER(CNT_DAC_PHYTIME_ADVANCE, tsAdvance);
             if (tsAdvance < reschedule_time || tsAdvance > 0x7FFFFFFFu) {
                 ++tx_stats.afe_drop;
-                // ++pipe->count_dmac_complete;
-                // ++pipe->count_dmac_enque;
-                --pipe->buffers_provided;
+                --afe->buffers_prepared;
                 // The dropped buffer carried the burst's START. Without it the following buffers of the burst would be
                 // enqueued with no DAC start scheduled and wait for ever (Tx stall). Start the burst at its first buffer
                 // that is still in time instead, as the underrun recovery does.
@@ -470,18 +435,19 @@ static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
     } else
         pipe->expected_end_phytime += DAC_XFER_SAMPLE_COUNT;
     const uint32_t dac_dma_flags = dac_meta->flags & IQSTREAM_TRX_END ? DMAC_FIFO_RESET : 0;
-    dac_enque(pipe, dac_next_enq_buffer(pipe), dac_dma_flags);
+    dac_enque(pipe, afe_next_enq_buffer(afe), dac_dma_flags);
 }
 
 static void ddr_to_dac_work(uint16_t lane) {
     TRACE_START_DURATION(t1);
-    tx_ddr_pipeline_t *const ddr = &txddr[lane];
+    tx_ddr_pipeline_t *const tx = &txddr[lane];
     dac_pipeline_t *const dac = &tx_dac[lane];
+    afe_pipeline_t *const axiq = &tx_dac[lane].afe;
 
-    cfixed16_t *const ddr_src = ddr_current_ready_buffer(ddr);
-    tx_meta_t *const ddr_meta = ddr_current_ready_meta(ddr);
+    cfixed16_t *const ddr_src = tx_ddr_current_ready_buffer(tx);
+    tx_meta_t *const ddr_meta = tx_ddr_current_ready_meta(tx);
 
-    cfixed16_t *const dac_dest = dac_next_free_buffer(dac);
+    cfixed16_t *const dac_dest = afe_dac_next_free_buffer(axiq);
     tx_meta_t *const dac_meta = dac_next_free_meta(dac);
     dac_meta->flags = ddr_meta->flags;
     dac_meta->phytime = ddr_meta->phytime;
@@ -489,73 +455,95 @@ static void ddr_to_dac_work(uint16_t lane) {
     if (int_ratio_pow2[lane]) {
         if (ddr_meta->flags & IQSTREAM_TRX_START) {
             ddr_meta->flags ^= IQSTREAM_TRX_START; // clear as ddr buffer is consumed over multiple interpolations
-            memclr(int_history, sizeof(int_history)); // reset interpolator for new start
             if (txpipe[lane].generate_tone)
                 gen_nco_single_tone(ddr_src, DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES,
                                     tx_tone_state[lane].fcw >> int_ratio_pow2[lane], tx_tone_state[lane].amplitude,
                                     &tx_tone_state[lane].phase);
+            memset16(int_history, 0, sizeof(int_history)); // reset interpolator for new start
         }
         const uint16_t work_samples_count = DAC_XFER_SAMPLE_COUNT >> int_ratio_pow2[lane];
-        interpol(dac_dest, ddr_src + ddr->ready_buffer_offset, int_history, work_samples_count);
-        ddr->ready_buffer_offset += work_samples_count;
+        interpol(dac_dest, ddr_src + tx->ready_buffer_offset, int_history, work_samples_count);
+        tx->ready_buffer_offset += work_samples_count;
 
         // qec inplace
-        tx_qec_correction(dac_dest, dac_dest, DAC_XFER_SAMPLE_COUNT);
+        if (txpipe[lane].generate_tone) {
+            gen_nco_single_tone(dac_dest, DAC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES,
+                                tx_tone_state[lane].fcw >> int_ratio_pow2[lane], tx_tone_state[lane].amplitude,
+                                &tx_tone_state[lane].phase);
+        }
+        tx_qec_correction(dac_dest, dac_dest, DAC_DMEM_LINES_COUNT);
         rhf_rhf_rsp_vMultiSclr_asm(dac_dest, dac_dest, &upscalefactor, DAC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         ddr_meta->phytime += DAC_XFER_SAMPLE_COUNT;
         dac_meta->flags &= ~IQSTREAM_TRX_END;
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);
-        if (ddr->ready_buffer_offset >= DDR_XFER_SAMPLE_COUNT) {
-            ++ddr->buffers_consumed;
-            ddr->consumed_slot = tx_ddr_next_slot(ddr->consumed_slot);
-            TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));
-            ddr->ready_buffer_offset = 0;
+        if (tx->ready_buffer_offset >= DDR_XFER_SAMPLE_COUNT) {
+            ++tx->ddr.buffers_consumed;
+            tx->consumed_slot = tx_ddr_next_slot(tx->consumed_slot);
+            TRACE_COUNTER(CNT_TX_DDR_READY, ddr_tx_buffers_ready(&tx->ddr));
+            tx->ready_buffer_offset = 0;
             dac_meta->flags |= ddr_meta->flags & IQSTREAM_TRX_END;
-            tx_lane_try_ddr_enqueue(ddr, true);
+            tx_lane_try_ddr_enqueue(tx, true);
         }
 
     } else {
-        if (txpipe[lane].generate_tone)
+        if (txpipe[lane].generate_tone) {
             gen_nco_single_tone(ddr_src, DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES,
                                 tx_tone_state[lane].fcw >> int_ratio_pow2[lane], tx_tone_state[lane].amplitude,
                                 &tx_tone_state[lane].phase);
-        tx_qec_correction(dac_dest, ddr_src, DAC_XFER_SAMPLE_COUNT);
+        }
+        tx_qec_correction(dac_dest, ddr_src, DAC_DMEM_LINES_COUNT);
         rhf_rhf_rsp_vMultiSclr_asm(dac_dest, dac_dest, &upscalefactor, DAC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);
-        ++ddr->buffers_consumed;
-        ddr->consumed_slot = tx_ddr_next_slot(ddr->consumed_slot);
-        TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));
-        tx_lane_try_ddr_enqueue(ddr, true);
+        ++tx->ddr.buffers_consumed;
+        tx->consumed_slot = tx_ddr_next_slot(tx->consumed_slot);
+        TRACE_COUNTER(CNT_TX_DDR_READY, ddr_tx_buffers_ready(&tx->ddr));
+        tx_lane_try_ddr_enqueue(tx, true);
     }
     TRACE_COUNTER(CNT_DAC_PHYTIME_ADVANCE, dac_meta->phytime + stream_origin_phyticks - phytime_now());
-    ++dac->buffers_provided;
-    dac_enq_pending_buffer(&tx_dac[lane]);
+    ++axiq->buffers_prepared;
+    dac_enq_pending_buffer(dac);
 }
 
-static inline cfixed16_t *dac_next_complete_buffer(dac_pipeline_t *pipe) {
-    return pipe->base_buffer + (pipe->count_dmac_complete & 0x1) * DAC_XFER_SAMPLE_COUNT;
+static void dac_generate_tone_work(uint16_t lane, cfixed16_t *buf) {
+    gen_nco_single_tone(buf, DAC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES,
+                        tx_tone_state[lane].fcw >> int_ratio_pow2[lane] // adjust fcw to host side expected sample rate
+                        ,
+                        tx_tone_state[lane].amplitude, &tx_tone_state[lane].phase);
+    tx_qec_correction(buf, buf, DAC_DMEM_LINES_COUNT);
+    dac_enque(&tx_dac[lane], buf, 0);
 }
 
 void dac_dma_complete(uint16_t lane) {
     TRACE_START_DURATION(t1);
-    TRACE_DMA_END(tx_dac[lane].dma_channel, tx_dac[lane].count_dmac_complete & 1);
+    dac_pipeline_t *const dac = &tx_dac[lane];
+    afe_pipeline_t *const afe = &dac->afe;
+    ddr_pipeline_t *const ddr = &txddr[lane].ddr;
+    TRACE_DMA_END(afe_dma_channel(afe), afe->count_dmac_complete & 1);
 
-    const uint32_t dma_mask = (1 << tx_dac[lane].dma_channel);
+    const uint32_t dma_mask = 1 << afe_dma_channel(afe);
     dmac_clear_complete(dma_mask); // redundant, only using event bits
     dmac_clear_event(dma_mask);
 
     // TODO: use modulo buffer registers for circular addressing?
-    cfixed16_t *const completed_buffer = dac_next_complete_buffer(&tx_dac[lane]);
-    tx_meta_t *const dac_meta = dac_next_complete_meta(&tx_dac[lane]);
-    ++tx_dac[lane].count_dmac_complete;
+    cfixed16_t *const completed_buffer = afe_next_complete_buffer(afe);
+    tx_meta_t *const dac_meta = dac_next_complete_meta(dac);
+    ++afe->count_dmac_complete;
     ++tx_stats.afe_compl;
-    if ((dac_meta->flags & IQSTREAM_TRX_END) && tx_dac[lane].end_deferred) {
-        tx_dac[lane].end_deferred = false;
-        dac_schedule_end(&tx_dac[lane], dac_meta);
+
+    if (txpipe[lane].generate_tone) {
+        // generate samples and reenque immediately
+        dac_generate_tone_work(0, completed_buffer);
+        TRACE_DURATION(T_DAC_COMPLETE, DEFAULT_THREAD_ID, t1);
+        return;
+    }
+
+    if ((dac_meta->flags & IQSTREAM_TRX_END) && dac->end_deferred) {
+        dac->end_deferred = false;
+        dac_schedule_end(dac, dac_meta);
     }
 
     // check if DDR has available data
-    if (!txpipe[lane].generate_tone && ddr_buffers_ready(&txddr[lane]) == 0) {
+    if (ddr_tx_buffers_ready(ddr) == 0) {
         // DDR depleted
         // `flags & IQSTREAM_TRX_END == 0` parses as `flags & (IQSTREAM_TRX_END == 0)`, which is always 0
         if ((dac_meta->flags & IQSTREAM_TRX_END) == 0) {
@@ -574,18 +562,19 @@ void dac_dma_complete(uint16_t lane) {
 
 // @brief Aborts and drops all current DDR buffers
 static void tx_drop_ddr(uint16_t lane) {
-    tx_ddr_pipeline_t *const ddr = &txddr[lane];
-    tx_stats.dfe_drop += ddr_buffers_in_use(ddr);
+    tx_ddr_pipeline_t *const tx = &txddr[lane];
+    ddr_pipeline_t *const ddr = &tx->ddr;
+    tx_stats.dfe_drop += ddr_tx_buffers_in_use(ddr);
 
     if (ddr->count_dmac_enque - ddr->count_dmac_complete > 0) {
         dmac_abort(1 << ddr->dma_channel);
         uint32_t in_flight_flags = 0;
-        uint8_t slot = ddr->cpl_slot;
+        uint8_t slot = tx->cpl_slot;
         for (uint32_t i = ddr->count_dmac_complete; i != ddr->count_dmac_enque; ++i, slot = tx_ddr_next_slot(slot))
-            in_flight_flags |= ddr->meta[slot].flags;
+            in_flight_flags |= tx->meta[slot].flags;
         if (in_flight_flags & IQSTREAM_DMA_TCD_END) {
-            ++ddr->dma_hif.tcd_table.done;
-            vspa_to_host_signal(ddr->dma_hif.vth_tcd_done_flag_mask);
+            ++ddr->dma.tcd_table.done;
+            vspa_to_host_signal(ddr->dma.vth_tcd_done_flag_mask);
         }
     }
 
@@ -594,37 +583,39 @@ static void tx_drop_ddr(uint16_t lane) {
     ddr->count_dmac_enque = 0;
     ddr->count_dmac_complete = 0;
     ddr->buffers_consumed = 0;
-    ddr->enq_slot = ddr->cpl_slot = ddr->consumed_slot = 0;
-    ddr->ready_buffer_offset = 0;
-    memclr(ddr->meta, sizeof(ddr->meta));
+    tx->enq_slot = tx->cpl_slot = tx->consumed_slot = 0;
+    tx->ready_buffer_offset = 0;
+    memset16(tx->meta, 0, sizeof(tx->meta));
 }
 
 void tx_ddr_complete(uint16_t lane) {
     TRACE_START_DURATION(t1);
-    tx_ddr_pipeline_t *const ddr = &txddr[lane];
+    tx_ddr_pipeline_t *const tx = &txddr[lane];
+    ddr_pipeline_t *const ddr = &tx->ddr;
     TRACE_DMA_END(ddr->dma_channel, ddr->count_dmac_complete & 1);
     dmac_clear_complete(1 << ddr->dma_channel);
     dmac_clear_event(1 << ddr->dma_channel);
 
-    tx_meta_t *const ddr_meta = ddr_next_completed_meta(ddr);
+    tx_meta_t *const ddr_meta = tx_ddr_next_completed_meta(tx);
     ++ddr->count_dmac_complete;
-    ddr->cpl_slot = tx_ddr_next_slot(ddr->cpl_slot);
+    tx->cpl_slot = tx_ddr_next_slot(tx->cpl_slot);
     ++tx_stats.dfe_compl;
     TRACE_COUNTER(CNT_TX_DDR_ENQ, ddr->count_dmac_enque - ddr->count_dmac_complete);
-    TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));
+    TRACE_COUNTER(CNT_TX_DDR_READY, ddr_tx_buffers_ready(ddr));
 
     if (ddr_meta->flags & IQSTREAM_DMA_TCD_END) {
-        ++ddr->dma_hif.tcd_table.done;
+        ++ddr->dma.tcd_table.done;
         ++proxy.tx_dma_done;
         proxy_dirty = true;
-        vspa_to_host_signal(ddr->dma_hif.vth_tcd_done_flag_mask);
+        vspa_to_host_signal(ddr->dma.vth_tcd_done_flag_mask);
     }
 
     TRACE_COUNTER(CNT_DDR_CMPL_ADVANCE, ddr_meta->phytime + stream_origin_phyticks - phytime_now());
-    if (dac_buffers_in_use(&tx_dac[lane]) < MAX_DMA_ENQ)
+    afe_pipeline_t *const axiq = &tx_dac[lane].afe;
+    if (afe_dac_buffers_in_use(axiq) < MAX_DMA_ENQ)
         ddr_to_dac_work(lane);
     // read ahead into the free ring slots while the DAC is still busy with earlier buffers
-    tx_initial_ddr_enque(lane);
+    tx_initial_ddr_enque(tx);
 
     TRACE_DURATION(T_DDR_RD_COMPLETE, DEFAULT_THREAD_ID, t1);
 }
@@ -637,9 +628,9 @@ void transmitter_init(void) {
     // don't change RF switch until configured which values should be used
     tx_tdd.rf_sw_on_comparator_out = ePhyTimerComparatorNoChange;
     tx_tdd.rf_sw_off_comparator_out = ePhyTimerComparatorNoChange;
-    TxAXIQ(false);
-    for (int lane = 0; lane < TX_MAX_LANE_COUNT; ++lane) {
-        vspa_dma_hif_t *dma_hif = &txddr[lane].dma_hif;
+
+    for (uint16_t lane = 0; lane < TX_MAX_LANE_COUNT; ++lane) {
+        vspa_dma_hif_t *const dma_hif = &txddr[lane].ddr.dma;
         dma_hif->tcd_table.done = 0;
         dma_hif->htv_tcd_pending_flag_mask = (HTV_SIGNAL_TXLANE0_TCD_PENDING << lane);
         dma_hif->vth_tcd_done_flag_mask = (VTH_SIGNAL_TXLANE0_TCD_DONE << lane);
@@ -676,136 +667,38 @@ int tx_get_oversampling(uint16_t channel) {
     return tx_channel_cfg[channel].interpolate_pow2;
 }
 
-// @brief Aborts DAC DMA and drops all pending buffers
-static void inline tx_axiq_fifo_reset(uint16_t lane) {
-    TRACE_START_DURATION(t1);
-    timer_trig_immediate(PHY_TIMER_COMP_CH5_TX_ALLOWED, ePhyTimerComparatorOut1);
-
-    TxAXIQ(true); // enable just in case it wasn't. We'll need falling edge.
-    uint32_t dma_mask = 1 << tx_dac[lane].dma_channel;
-    TxAXIQ(false); // falling edge, enters DMA flush mode
-    // aborted DMA transactions won't trigger their complete/go/ptr_rst
-    dmac_abort(dma_mask);
-
-    // ensure abort has ended before issuing new dma commands
-    WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
-
-    const uint32_t ctrl = DMAC_FIFO_RESET | DMAC_WRC | tx_dac[lane].dma_channel;
-    // Need to write enough data to trigger AXIQ FIFO threshold
-    // AXI bus widht 128bits (16 bytes)
-    dmac_enable(ctrl, 16, tx_dac[lane].axi_fifo_addr, VCPU_ADDR_FOR_DMA(dac_buffer[lane]));
-
-    // wait for ptr reset
-    WAIT_FOR(dmac_is_complete(dma_mask), VSPA_DEFAULT_TIMEOUT);
-
-    dma_mask |= timer_trig_immediate_async(PHY_TIMER_COMP_CH5_TX_ALLOWED, ePhyTimerComparatorOut0);
-    // treat as all transfers completed
-    tx_stats.afe_drop += tx_dac[lane].buffers_provided - tx_dac[lane].count_dmac_complete;
-    proxy.tx_drop += tx_dac[lane].buffers_provided - tx_dac[lane].count_dmac_complete;
-
-    tx_dac[lane].buffers_provided = 0;
-    tx_dac[lane].count_dmac_complete = 0;
-    tx_dac[lane].count_dmac_enque = 0;
-    // tx_stats.afe_compl = 0;
-    // tx_stats.afe_enq = 0;
-    WAIT_FOR(dmac_is_complete(dma_mask) == dma_mask, VSPA_DEFAULT_TIMEOUT);
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
-    TRACE_DURATION(T_DAC_AXIQ_RST, DEFAULT_THREAD_ID, t1);
-}
-
-// @brief Aborts DAC DMA and drops all pending buffers
-static inline void dac_axiq_reset(uint16_t lane) {
-    TRACE_START_DURATION(t1);
-    axiq_tx_disable(); // falling edge triggers DMA flush mode
-    const uint32_t dma_mask = 1 << tx_dac[lane].dma_channel;
-    // aborted DMA transactions won't trigger their complete/go/ptr_rst
-    dmac_abort(dma_mask);
-    timer_trig_immediate_async(PHY_TIMER_COMP_CH5_TX_ALLOWED, ePhyTimerComparatorOut0);
-    tx_stats.afe_drop += dac_buffers_in_use(&tx_dac[lane]);
-    proxy.tx_drop += dac_buffers_in_use(&tx_dac[lane]);
-    tx_dac[lane].buffers_provided = 0;
-    tx_dac[lane].count_dmac_complete = 0;
-    tx_dac[lane].count_dmac_enque = 0;
-    tx_dac[lane].end_scheduled = false;
-    tx_dac[lane].end_deferred = false;
-    tx_dac[lane].in_progress = false;
-
-    // ensure abort has ended before issuing new dma commands
-    WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
-    // while(dmac_is_running(dma_mask))
-    // {}
-
-    // do fifo ptr_rst to exit FLUSH mode.
-    dmac_enable(TX_DAC_WR_DMA_CHANNEL | DMAC_FIFO_RESET | DMAC_PEND_EXT, 16, dac_axi_fifo_addr, VCPU_ADDR_FOR_DMA(dac_buffer));
-
-    WAIT_FOR(dmac_is_complete(dma_mask), VSPA_DEFAULT_TIMEOUT);
-
-    dmac_clear_complete(dma_mask);
-    dmac_clear_event(dma_mask);
-    TRACE_DURATION(T_DAC_AXIQ_RST, DEFAULT_THREAD_ID, t1);
-}
-
-static inline void tx_axiq_enable_clear_err(void) {
-    iowr(AXIQ_CR3, (AXIQ_CR_FIELD_ENABLE | AXIQ_CR_FIELD_CLRERR) << AXIQ_CR_SHIFT_TX0,
-         (AXIQ_CR_FIELD_ENABLE | AXIQ_CR_FIELD_CLRERR) << AXIQ_CR_SHIFT_TX0);
-    iowr(AXIQ_CR3, AXIQ_CR_FIELD_CLRERR << AXIQ_CR_SHIFT_TX0, 0);
-}
-
 static inline void tx_handle_dac_underrun(void) {
     TRACE_START_DURATION(t1);
     const uint16_t lane = 0;
     dac_pipeline_t *const dac = &tx_dac[lane];
+    ddr_pipeline_t *const ddr = &txddr[lane].ddr;
     // Flush pending xfers and reset AXIQ fifo
-    const uint32_t dac_mask = 1 << dac->dma_channel;
-    dmac_abort(dac_mask); // aborted xfers won't trigger their complete/go/ptr_rst
-    axiq_tx_disable(); // falling edge triggers DMA flush mode
-    dac_stop_immediate();
+    afe_pipeline_t *const afe = &dac->afe;
 
-    tx_stats.afe_drop += dac_buffers_in_use(dac);
-    proxy.tx_drop += dac_buffers_in_use(dac);
-    dac->buffers_provided = 0;
-    dac->count_dmac_complete = 0;
-    dac->count_dmac_enque = 0;
+    tx_stats.afe_drop += afe_dac_buffers_in_use(afe);
+    proxy.tx_drop += afe_dac_buffers_in_use(afe);
+    afe_axiq_fifo_reset(afe);
+
     dac->in_progress = false;
     dac->end_scheduled = false;
     dac->end_deferred = false;
     dac->force_start = true;
 
-    // ensure abort has ended before issuing new dma commands
-    WAIT_FOR(!dmac_is_running(dac_mask), VSPA_DEFAULT_TIMEOUT);
-    // while(dmac_is_running(dac_mask))
-    // {}
-    dmac_clear_complete(dac_mask);
-
-    // do fifo ptr_rst to exit FLUSH mode. Must use DMAC_PEND_EXT, so that dma channel would wait for reset handshake.
-    dmac_enable(TX_DAC_WR_DMA_CHANNEL | DMAC_WRC | DMAC_FIFO_RESET | DMAC_PEND_EXT, 16, dac_axi_fifo_addr,
-                VCPU_ADDR_FOR_DMA(dac->base_buffer));
-
-    WAIT_FOR(dmac_is_complete(dac_mask), VSPA_DEFAULT_TIMEOUT);
-    // while (!dmac_is_complete(dac_mask))
-    // {}
-
-    dmac_clear_complete(dac_mask);
-    dmac_clear_event(dac_mask);
-
-    tx_axiq_enable_clear_err();
-
     // discard following buffers that would be late
     uint32_t now = phytime_now();
-    tx_ddr_pipeline_t *const ddr = &txddr[lane];
-    while (ddr_buffers_ready(ddr) > 0) {
-        tx_meta_t *const ddr_meta = ddr_current_ready_meta(ddr);
+    tx_ddr_pipeline_t *const tx = &txddr[lane];
+    while (ddr_tx_buffers_ready(ddr) > 0) {
+        tx_meta_t *const ddr_meta = tx_ddr_current_ready_meta(tx);
         const uint32_t tsAdvance = (ddr_meta->phytime + stream_origin_phyticks) - phytime_now();
         if (tsAdvance < reschedule_time || tsAdvance > 0x7FFFFFFFu) {
             // drop ddr buffer
             ++tx_stats.dfe_drop;
             ++proxy.tx_drop;
-            ++ddr->buffers_consumed;
-            ddr->consumed_slot = tx_ddr_next_slot(ddr->consumed_slot);
-            tx_lane_try_ddr_enqueue(ddr, true);
-            ddr->ready_buffer_offset = 0;
-            TRACE_COUNTER(CNT_TX_DDR_READY, ddr_buffers_ready(ddr));
+            ++tx->ddr.buffers_consumed;
+            tx->consumed_slot = tx_ddr_next_slot(tx->consumed_slot);
+            tx_lane_try_ddr_enqueue(tx, true);
+            tx->ready_buffer_offset = 0;
+            TRACE_COUNTER(CNT_TX_DDR_READY, ddr_tx_buffers_ready(ddr));
             continue;
         }
 
@@ -824,20 +717,18 @@ static inline void tx_handle_dac_underrun(void) {
 
 // Resets pipeline for streaming session
 void tx_lane_prime(uint16_t lane) {
-    tx_ddr_pipeline_t *const ddr = &txddr[lane];
+    tx_ddr_pipeline_t *const tx = &txddr[lane];
     dac_pipeline_t *const dac = &tx_dac[lane];
-    memclr(&tx_stats, sizeof(tx_stats));
+    memset16(&tx_stats, 0, sizeof(tx_stats));
 
     int_ratio_pow2[lane] = tx_channel_cfg[dac->channel].interpolate_pow2;
-    tx_ddr_reset(ddr, ddr_read_buffer[lane]);
-    tx_host_dma_reset(ddr);
+    tx_ddr_reset(tx, ddr_read_buffer[lane]);
+    tx_host_dma_reset(tx);
 
-    tx_dac_reset(&tx_dac[lane], dac_buffer[lane]);
-    tx_axiq_fifo_reset(lane);
+    tx_dac_reset(dac, dac_buffer[lane]);
 
     TxAXIQ(true);
-    axiq_fifo_tx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)dac->axi_fifo_index, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-    axiq_fifo_tx_cr(AXIQ_BANK_0, (enum axiq_fifo_e)dac->axi_fifo_index, AXIQ_CR_CLRERR, 0);
+    afe_axiq_fifo_clear_err(dac->afe.config.axi_fifo_index);
 
     proxy.tx_udr = 0;
     proxy.tx_drop = 0;
@@ -852,7 +743,7 @@ void tx_lane_ddr_enable(uint16_t lane, bool enable) {
 // Aborts any pending transfers and resets the pipeline's AXIQ FIFO
 void tx_lane_abort(uint16_t lane) {
     tx_drop_ddr(lane);
-    tx_axiq_fifo_reset(lane);
+    afe_pipe_abort(&tx_dac[lane].afe);
 }
 
 int tx_tone_enable(uint16_t lane, bool enable) {
@@ -861,26 +752,32 @@ int tx_tone_enable(uint16_t lane, bool enable) {
     txpipe[lane].generate_tone = enable;
 
     if (enable) {
-        tx_lane_prime(lane);
+        dac_pipeline_t *const dac = &tx_dac[0];
+        afe_pipeline_t *const afe = &tx_dac[0].afe;
+        tx_dac_reset(dac, dac_buffer[lane]);
+        int_ratio_pow2[lane] = tx_channel_cfg[dac->channel].interpolate_pow2;
+        TxAXIQ(true);
+        afe_axiq_fifo_clear_err(afe->config.axi_fifo_index);
+
         // initial work twice to produce two initial DAC buffers
         // no timestamps provided, will start immediately
-        ddr_to_dac_work(lane);
-        ddr_to_dac_work(lane);
+        dac_generate_tone_work(lane, afe_next_enq_buffer(afe));
+        dac_generate_tone_work(lane, afe_next_enq_buffer(afe));
     } else {
         tx_lane_abort(lane);
-        timer_trig_immediate(PHY_TIMER_COMP_CH5_TX_ALLOWED, ePhyTimerComparatorOut0);
     }
+    timer_trig_immediate(PHY_TIMER_COMP_CH5_TX_ALLOWED, enable ? ePhyTimerComparatorOut1 : ePhyTimerComparatorOut0);
     return 0;
 }
 
 void host_submitted_tx_tcd(uint16_t lane) {
-    if (ddr_buffers_in_use(&txddr[lane]) >= TX_DDR_RING)
+    if (ddr_tx_buffers_in_use(&txddr[lane].ddr) >= TX_DDR_RING)
         return; // skip, all ddr buffers are in use
 
     // host only needs to signal the first TCD insertion to make VSPA go,
     // after that VSPA is self triggering with transfers completions.
     // Host can signal each insertion, but the extra GO events can upset DMA pacing.
-    tx_initial_ddr_enque(lane);
+    tx_initial_ddr_enque(&txddr[lane]);
 }
 
 static void tx_window_closed(dac_pipeline_t *dac);
@@ -902,7 +799,7 @@ static inline void tx_check_window_end(void) {
 void tx_check_axiq_status(void) {
     tx_check_window_end();
     // TODO: interpolation path after underruns somehow end up with ddr buffers ready, but no events to trigger work
-    if (ddr_buffers_ready(&txddr[0]) && !dac_buffers_in_use(&tx_dac[0]))
+    if (ddr_tx_buffers_ready(&txddr[0].ddr) && !afe_dac_buffers_in_use(&tx_dac[0].afe))
         ddr_to_dac_work(0);
 
     // Check AXIQ tx fifo is not full or overrun
@@ -924,8 +821,7 @@ void tx_check_axiq_status(void) {
         tx_handle_dac_underrun();
         return;
     }
-    axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-    axiq_fifo_tx_cr(AXIQ_BANK_0, AXIQ_FIFO_TX0, AXIQ_CR_CLRERR, 0);
+    afe_axiq_fifo_clear_err(AXIQ_FIFO_TX0);
 }
 
 // The current transmission window has ended: allow the next START and enqueue the DAC buffers waiting for it.
@@ -933,9 +829,10 @@ static void tx_window_closed(dac_pipeline_t *dac) {
     dac->in_progress = false;
     dac->end_scheduled = false;
     dac->end_deferred = false;
-    if (dac_buffers_ready(dac) > 0) {
+    afe_pipeline_t *const axiq = &dac->afe;
+    if (afe_dac_buffers_prepared(axiq) > 0) {
         dac_enq_pending_buffer(dac);
-        if (dac_buffers_ready(dac) > 0)
+        if (afe_dac_buffers_prepared(axiq) > 0)
             dac_enq_pending_buffer(dac);
     }
 }

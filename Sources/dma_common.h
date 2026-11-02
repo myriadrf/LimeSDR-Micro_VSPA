@@ -27,7 +27,7 @@
 #define DDR_WR_DMA_CHANNEL_5 0x0
 
 #define RO0_ADC_RD_DMA_CHANNEL 0x1
-#define R01_ADC_RD_DMA_CHANNEL 0x2
+#define RO1_ADC_RD_DMA_CHANNEL 0x2
 #define RX0_ADC_RD_DMA_CHANNEL 0x3
 #define RX1_ADC_RD_DMA_CHANNEL 0x4
 
@@ -48,7 +48,7 @@
 
 #define DMEM_LINE_SIZE_BYTES 128 // 1024 bits
 
-#define VSPA_DEFAULT_TIMEOUT 2000
+#define VSPA_DEFAULT_TIMEOUT 4000
 
 // VSPA addresing is in 16bit granularity
 #define VSPA_HALF_WORDS(x) ((uint32_t)x << 1)
@@ -56,18 +56,6 @@
 // VSPA addresses in half words (16bits), DMA uses bytes (8bits)
 #define VCPU_ADDR_FOR_DMA(x) (((uint32_t)x) << 1)
 
-uint32_t dma_chan_mask(uint32_t dma_channel, uint8_t nb_dma);
 void dma_clear_all_bits(uint32_t mask);
-
-static bool did_timeout = false;
-
-#define WAIT_TIMEOUT_R(cond, timeout_cycles) \
-    do {                                     \
-        did_timeout = false;                 \
-        uint32_t timeout = timeout_cycles;   \
-        do {                                 \
-        } while (!(cond) && --timeout);      \
-        did_timeout = timeout == 0;          \
-    } while (0)
 
 #endif // DMA_COMMON_H
