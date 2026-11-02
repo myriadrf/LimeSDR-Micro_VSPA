@@ -226,7 +226,7 @@ int rx_select_channel(uint16_t lane, e_rx_channel channel) {
 
     rx_generator[lane].amplitude = 0.9;
     rx_generator[lane].phase = 0;
-    rx_generator[lane].freq_bin = 1;
+    rx_generator[lane].fcw = 1;
 
     rx_ddr[lane].dma.htv_tcd_pending_flag_mask = (HTV_SIGNAL_RXLANE0_TCD_PENDING << lane);
     rx_ddr[lane].dma.vth_tcd_done_flag_mask = (VTH_SIGNAL_RXLANE0_TCD_DONE << lane);
@@ -598,6 +598,7 @@ vspa_complex_float32 *rx_fft(uint16_t channel) {
 extern void ProcessTxDMA(void);
 
 cfixed16_t *capture_adc(uint16_t channel) {
+    return 0;
     uint16_t lane = 0;
     rx_select_channel(lane, (e_rx_channel)channel);
 

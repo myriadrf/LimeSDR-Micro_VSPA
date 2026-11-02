@@ -266,7 +266,7 @@ void tx_lane_setup(uint16_t lane, uint16_t channel) {
 
     tx_tone_state[lane].amplitude = 0.9;
     tx_tone_state[lane].phase = 0;
-    tx_tone_state[lane].freq_bin = 8192;
+    tx_tone_state[lane].fcw = 8192;
 
     txddr[lane].dma_channel = DDR_RD_DMA_CHANNEL_1; // + lane;
     tx_ddr_reset(&txddr[lane], ddr_read_buffer[lane]);
@@ -491,7 +491,9 @@ static void ddr_to_dac_work(uint16_t lane) {
             ddr_meta->flags ^= IQSTREAM_TRX_START; // clear as ddr buffer is consumed over multiple interpolations
             memclr(int_history, sizeof(int_history)); // reset interpolator for new start
             if (txpipe[lane].generate_tone)
-                gen_nco_single_tone(ddr_src, DDR_XFER_SAMPLE_COUNT, &tx_tone_state[lane]);
+                gen_nco_single_tone(ddr_src, DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES,
+                                    tx_tone_state[lane].fcw >> int_ratio_pow2[lane], tx_tone_state[lane].amplitude,
+                                    &tx_tone_state[lane].phase);
         }
         const uint16_t work_samples_count = DAC_XFER_SAMPLE_COUNT >> int_ratio_pow2[lane];
         interpol(dac_dest, ddr_src + ddr->ready_buffer_offset, int_history, work_samples_count);
@@ -514,7 +516,9 @@ static void ddr_to_dac_work(uint16_t lane) {
 
     } else {
         if (txpipe[lane].generate_tone)
-            gen_nco_single_tone(ddr_src, DDR_XFER_SAMPLE_COUNT, &tx_tone_state[lane]);
+            gen_nco_single_tone(ddr_src, DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES,
+                                tx_tone_state[lane].fcw >> int_ratio_pow2[lane], tx_tone_state[lane].amplitude,
+                                &tx_tone_state[lane].phase);
         tx_qec_correction(dac_dest, ddr_src, DAC_XFER_SAMPLE_COUNT);
         rhf_rhf_rsp_vMultiSclr_asm(dac_dest, dac_dest, &upscalefactor, DAC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);

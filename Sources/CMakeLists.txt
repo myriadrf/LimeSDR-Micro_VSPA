@@ -11,7 +11,6 @@ set(COMMON_IQPLAYER_SOURCE
     crt0.s
     dfe.c
     l1-trace.c
-    tone_generator.c
     receiver.c
     transmitter.c
     dma_common.c
@@ -20,12 +19,14 @@ set(COMMON_IQPLAYER_SOURCE
     phytimer.c
     proxy_data.c
     conversion.sx
+    tone_generator.sx
 )
 
 # CMake does not recognize .sx as assembly, only .s or .asm
 set_source_files_properties(
     crt0.s
     conversion.sx
+    tone_generator.sx
     PROPERTIES LANGUAGE C
 )
 

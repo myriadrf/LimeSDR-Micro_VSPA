@@ -1,0 +1,81 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright 2026 Lime Microsystems
+
+#include "vspa.h"
+
+    .section .text.gen_nco_single_tone
+
+// void gen_nco_single_tone(cfixed16_t *buffer, uint16_t dmem_lines, uint32_t freq_ctrl_word, float amplitude, uint32_t *phase);
+//
+// Fills dmem_lines DMEM lines at buffer with a complex tone and advances *phase past the generated samples.
+// Uses no stack and writes only to [buffer, buffer + dmem_lines) and *phase.
+//
+// Arguments:
+// a0: buffer, must be DMEM line aligned
+// g0: dmem_lines, must not be 0 (the hardware loop treats a count of 0 as 65536)
+// g1: freq_ctrl_word
+// g2: amplitude, raw float32 bits
+// a1: phase
+//
+// Clobbers: a0, g1, g3, g4, R0, R4, R5, VRA pointers, NCO registers.
+//
+// VRA layout:
+// R0[0:1]: gain = {amplitude, 0}, read once into S0
+// R4, R5:  output lines. Two lines are used so that one can be stored while the other is being written.
+//
+// rV:  {4, 4.5, 5, 5.5}, incr 0.5
+// rSt: {4, 5}, incr 1
+//
+// The NCO advances by __AU_COUNT__ samples on each "rd S1", and one DMEM line holds two of those half lines.
+#define NCO_SAMPLES_PER_LINE_LOG2 5 // 32 samples = 2 * __AU_COUNT__
+
+    .global _gen_nco_single_tone
+    .type _gen_nco_single_tone, @function
+    .size _gen_nco_single_tone, _gen_nco_single_tone_end - _gen_nco_single_tone
+_gen_nco_single_tone:
+    ld g4, [a1]+0;                                  // g4 = start phase, valid after 3 more instructions
+    clr.VRA;                                        // clears the pointers, not the register contents
+    set.prec single, single, single, single, half_fixed; // must precede set.nco, NCO output is single precision only
+    clr R0;
+    mv.w [rV], g2;                                  // rV = 0 here: R0 word 0 = gain.real, word 1 (gain.imag) stays 0
+
+    // The next phase is computed rather than read back from nco_phase, which is a look-ahead value that also
+    // includes the extra "rd S1"s issued while the pipeline fills.
+    sl g3, g0, NCO_SAMPLES_PER_LINE_LOG2;
+    add g3, g3, g4;
+    st [a1]+0, g3;
+
+    set.VRAincr rV, _VRH;
+    set.VRAptr rV, 4*_VR;
+    set.VRArange1 rV, 4*_VR, 5*_VR+_VRH;
+    set.VRAincr rSt, 1;
+    set.VRAptr rSt, 4;
+    set.VRArange1 rSt, 4, 5;
+
+    set.nco normal, 0x1, 0;                         // "normal" = 16 complex samples per "rd S1"; clears nco_phase
+    xor g1, g1, -1;                                 // negate freq_bin
+    add g1, +1;
+    mv nco_freq, g1;
+    mv nco_phase, g4;                               // swaps g4 with the phase accumulator
+    nop;
+    nop;
+
+    // "rd S1" reaches cmad after 2 cycles, and cmad reaches wr after 4 cycles.
+    // The first store is 3 cycles after the first wr, by which point R4 is complete.
+    rd S0;  rd S1;  rd S2;                          set.Smode S0word, S1nco, S2zeros;
+            rd S1;
+            rd S1;          cmad;
+            rd S1;          cmad;
+            rd S1;          cmad;                   setB.loop g0, TONE_LOOP_START, TONE_LOOP_END;
+            rd S1;          cmad;
+            rd S1;          cmad;   wr.hlinecplx;
+            rd S1;          cmad;   wr.hlinecplx;
+TONE_LOOP_START:
+                            rd S1;  cmad;   wr.hlinecplx;   loop_begin;
+TONE_LOOP_END:
+    st.laddr [a0]+1;        rd S1;  cmad;   wr.hlinecplx;   loop_end;
+
+    rts;
+    nop;
+    nop;
+_gen_nco_single_tone_end:
