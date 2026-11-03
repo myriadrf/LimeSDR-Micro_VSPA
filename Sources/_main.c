@@ -126,9 +126,13 @@ static inline __attribute__((noreturn)) void SwReset(void) __noreturn {
 
 uint32_t stream_origin_phyticks = 0;
 
-static inline void stream_start_now(void) {
-    const uint32_t phytime_now = gpird(4); // Phytimer
-    stream_origin_phyticks = phytime_now + 256;
+static inline void stream_start_now(uint32_t phytime, bool specific_time) {
+    if (specific_time) {
+        stream_origin_phyticks = phytime;
+    } else {
+        const uint32_t phytime_now = gpird(4); // Phytimer
+        stream_origin_phyticks = phytime_now + 256;
+    }
     stream_trig_schedule_async(ePhyTimerComparatorOut1, stream_origin_phyticks);
     rx_stream_started();
 }
@@ -218,7 +222,9 @@ uint64_t HandleCommand(uint64_t msg64) {
         return (MAKEDWORD(VSPA_HALF_WORDS(output_address), lime_Result_Success));
     }
     case MBOX_OPC_STREAM_START: {
-        stream_start_now();
+        const uint32_t phytime = msg_lsb;
+        const bool specific_time = msg_msb & 0x1;
+        stream_start_now(phytime, specific_time);
         return (MAKEDWORD(0, lime_Result_Success));
     }
     case MBOX_OPC_TRACE_RESET: {
