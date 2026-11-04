@@ -50,7 +50,7 @@ static uint32_t tx_timer_values[9];
 // in VCPU DMEM: the IPPU DMEM holds the ADC buffers and the DDR read ring
 cfixed16_t dac_buffer[TX_MAX_LANE_COUNT][MAX_DMA_ENQ * DAC_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN;
 cfixed16_t ddr_read_buffer[TX_MAX_LANE_COUNT][TX_DDR_RING * DDR_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN
-    __attribute__((section(".ippu_dmem")));
+    __attribute__((section(".bss.ippu")));
 
 tx_pipeline_t txpipe[TX_MAX_LANE_COUNT] = { { false } };
 tone_state_t tx_tone_state[TX_MAX_LANE_COUNT];
@@ -80,7 +80,7 @@ static inline void phytmr_dma_wait_free(void) {
 static const uint16_t dac_clock_divider_disabled = 0; // TODO: read from config registers
 
 #define TX_MAX_UPSAMPLE_TAPS 64
-cfixed16_t int_history[TX_MAX_UPSAMPLE_TAPS] __attribute__((aligned(64), section(".vcpu_dmem"))) = { 0 };
+cfixed16_t int_history[TX_MAX_UPSAMPLE_TAPS] __attribute__((aligned(64), section(".bss.vcpu")));
 uint16_t int_ratio_pow2[TX_MAX_LANE_COUNT] = { 0 }; // copy of the lane's channel config, latched on lane prime
 
 static tx_channel_config_t tx_channel_cfg[TX_CHANNEL_COUNT];

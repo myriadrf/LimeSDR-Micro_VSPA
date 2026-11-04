@@ -132,6 +132,7 @@ unit private (*){
 			__bss_start = .;
 			".bss"
 			unmatch_bss("*");
+			".bss.vcpu"
 			.vbss
 			__end = .;
 			__bss_end = .;
@@ -141,6 +142,7 @@ unit private (*){
 		
 		.idata {
             .ippu_dmem
+            ".bss.ippu"
 		} > .idram
 		
 		.itext {

@@ -22,7 +22,7 @@ void l1_trace_init(void) {
 l1_trace_hif_t trace_hif = { 0, 0, 0, 0, 0 };
 
 // double buffer, fill one while another is DMA tranferred
-l1_trace_data_t events_buffer[L1_TRACE_CAPACITY] _VSPA_VECTOR_ALIGN __attribute__((section(".vcpu_dmem")));
+l1_trace_data_t events_buffer[L1_TRACE_CAPACITY] _VSPA_VECTOR_ALIGN __attribute__((section(".bss.vcpu")));
 uint16_t events_active_buffer = 0;
 uint16_t next_event_index = 0;
 uint16_t trace_bytes_submitted = 0;
