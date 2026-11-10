@@ -23,6 +23,8 @@ add_compile_options(
     -mvcpu
     -msgstyle gcc
     -enum min
+    -gccinc # adopt GCC #include semantics:  add '-I' paths to system list and search directory of referencing file first for #includes (same as '-cwd include')
+
     $<$<CONFIG:Debug>:-g> # generate debug info
 )
 

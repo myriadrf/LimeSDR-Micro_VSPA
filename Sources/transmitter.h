@@ -4,6 +4,8 @@
 #ifndef TRANSMITTER_H
 #define TRANSMITTER_H
 
+#include "fw_config.h"
+
 #include "iqplayer_commands.h"
 #include "vcpu.h"
 #include "vspa_dma_hif.h"
@@ -12,8 +14,6 @@
 #include "ddr_pipeline.h"
 
 #include <stdint.h>
-
-#define TX_CHANNEL_COUNT 1
 
 // Persistent channel parameters, applied to the lane which streams the channel
 typedef struct TxChannelConfig {
@@ -37,12 +37,15 @@ typedef struct TxDDR_lane {
     ddr_pipeline_t ddr; // its meta[] and wip_tcd are unused, Tx keeps its own meta ring
     tx_meta_t meta[TX_DDR_RING];
     uint16_t ready_buffer_offset;
-    uint8_t enq_slot;      // ring slot of the next DDR read (count_dmac_enque mod TX_DDR_RING)
-    uint8_t cpl_slot;      // ring slot of the next DDR read to complete (count_dmac_complete mod TX_DDR_RING)
-    uint8_t consumed_slot; // ring slot of the oldest ready buffer (buffers_consumed mod TX_DDR_RING)
+    uint8_t enq_slot; // ring slot of the next DDR read (count_dmac_enque mod ring_len)
+    uint8_t cpl_slot; // ring slot of the next DDR read to complete (count_dmac_complete mod ring_len)
+    uint8_t consumed_slot; // ring slot of the oldest ready buffer (buffers_consumed mod ring_len)
+    uint8_t ring_len; // slots in use, TX_DDR_RING or less when the interpolator takes slots as its work memory
 } tx_ddr_pipeline_t;
 
-static inline uint8_t tx_ddr_next_slot(uint8_t slot) { return slot + 1 == TX_DDR_RING ? 0 : slot + 1; }
+static inline uint8_t tx_ddr_next_slot(const tx_ddr_pipeline_t *tx, uint8_t slot) {
+    return slot + 1 == tx->ring_len ? 0 : slot + 1;
+}
 
 typedef struct DAC_lane {
     afe_pipeline_t afe;
@@ -72,8 +75,6 @@ typedef struct TxTDD_Config {
     uint16_t pa_on_comparator_out : 2;
     uint16_t pa_off_comparator_out : 2;
 } tx_tdd_config_t;
-
-#define TX_MAX_LANE_COUNT 1
 
 extern tx_ddr_pipeline_t txddr[TX_MAX_LANE_COUNT];
 extern tone_state_t tx_tone_state[TX_MAX_LANE_COUNT];

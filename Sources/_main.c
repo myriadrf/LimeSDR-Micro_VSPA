@@ -370,6 +370,6 @@ __attribute__((noreturn)) void main(void) {
 
     TRACE_DURATION(T_BUSY, DEFAULT_THREAD_ID, t1);
 
-    // vspa_core_stats.busy_cycles += ccnt_read() - cyccnt;
+    vspa_core_stats.busy_cycles += ccnt_read() - t1;
     __builtin_done();
 }

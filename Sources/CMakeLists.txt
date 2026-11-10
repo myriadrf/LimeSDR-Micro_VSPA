@@ -6,6 +6,9 @@ set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/Release)
 # set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 include_directories(${CMAKE_CURRENT_LIST_DIR})
 
+add_subdirectory(decimation)
+add_subdirectory(interpolation)
+
 set(COMMON_IQPLAYER_SOURCE
     _main.c
     crt0.s
@@ -43,5 +46,10 @@ add_executable(limesdr-micro-iqplayer
 target_link_options(limesdr-micro-iqplayer PUBLIC ${COMMON_LINK_OPTIONS}
     LINKER:-Map,${EXECUTABLE_OUTPUT_PATH}/limesdr-micro-iqplayer.map
 )
-target_link_libraries(limesdr-micro-iqplayer PUBLIC vspa-kernel vspa-sdk)
+target_link_libraries(limesdr-micro-iqplayer PUBLIC
+    vspa-kernel
+    vspa-sdk
+    decimator
+    interpolator
+)
 set_target_properties(limesdr-micro-iqplayer PROPERTIES LINK_DEPENDS ${LA9310_LINKER_SCRIPT})
