@@ -3,62 +3,35 @@
 
 #include "afe_pipeline.h"
 
+static inline bool axiq_fifo_is_tx(enum axiq_fifo_e fifo) { return fifo == AXIQ_FIFO_TX0; }
+
 void afe_axiq_fifo_enable(enum axiq_fifo_e fifo) {
-    switch (fifo) {
-    case AXIQ_FIFO_RX0:
-    case AXIQ_FIFO_RX1:
-    case AXIQ_FIFO_RX2:
-    case AXIQ_FIFO_RX3:
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_ENABLE);
-        return;
-    case AXIQ_FIFO_TX0:
+    if (axiq_fifo_is_tx(fifo))
         axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_ENABLE);
-        return;
-    }
+    else
+        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_ENABLE);
 }
 
 static inline void axiq_fifo_disable(enum axiq_fifo_e fifo) {
-    switch (fifo) {
-    case AXIQ_FIFO_RX0:
-    case AXIQ_FIFO_RX1:
-    case AXIQ_FIFO_RX2:
-    case AXIQ_FIFO_RX3:
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_DISABLE);
-        return;
-    case AXIQ_FIFO_TX0:
+    if (axiq_fifo_is_tx(fifo))
         axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_DISABLE);
-        return;
-    }
+    else
+        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_DISABLE);
 }
 
 static inline uint32_t axiq_fifo_status(enum axiq_fifo_e fifo) {
-    switch (fifo) {
-    case AXIQ_FIFO_RX0:
-    case AXIQ_FIFO_RX1:
-    case AXIQ_FIFO_RX2:
-    case AXIQ_FIFO_RX3: {
-        return axiq_fifo_rx_sr(AXIQ_BANK_0, fifo, AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER);
-    }
-    case AXIQ_FIFO_TX0: {
+    if (axiq_fifo_is_tx(fifo))
         return axiq_fifo_tx_sr(AXIQ_BANK_0, fifo, AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER);
-    }
-    }
-    return 0;
+    return axiq_fifo_rx_sr(AXIQ_BANK_0, fifo, AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER);
 }
 
 void afe_axiq_fifo_clear_err(enum axiq_fifo_e fifo) {
-    switch (fifo) {
-    case AXIQ_FIFO_RX0:
-    case AXIQ_FIFO_RX1:
-    case AXIQ_FIFO_RX2:
-    case AXIQ_FIFO_RX3: {
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, 0);
-    }
-    case AXIQ_FIFO_TX0: {
+    if (axiq_fifo_is_tx(fifo)) {
         axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
         axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, 0);
-    }
+    } else {
+        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
+        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, 0);
     }
 }
 
@@ -68,7 +41,7 @@ void afe_axiq_fifo_reset(afe_pipeline_t *pipe) {
     dmac_abort(dma_mask);
 
     axiq_fifo_disable(pipe->config.axi_fifo_index); // falling edge enters flush mode
-    timer_trig_immediate(pipe->config.phytimer_id, ePhyTimerComparatorOut1);
+    timer_trig_immediate_async(pipe->config.phytimer_id, ePhyTimerComparatorOut1);
     // wait for DMA to completely stop before issuing new commands
     WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
 
@@ -76,7 +49,8 @@ void afe_axiq_fifo_reset(afe_pipeline_t *pipe) {
     dmac_enable(pipe->config.dmac_ctrl_flags | DMAC_PRST_REQ, 16, pipe->config.axi_fifo_addr, VCPU_ADDR_FOR_DMA(pipe->base_buffer));
 
     WAIT_FOR(dmac_is_complete(dma_mask), VSPA_DEFAULT_TIMEOUT);
-    timer_trig_immediate(pipe->config.phytimer_id, ePhyTimerComparatorOut0);
+    timer_trig_immediate_async(pipe->config.phytimer_id, ePhyTimerComparatorOut0);
+    timer_wait_dma_complete();
     dma_clear_all_bits(dma_mask);
     afe_axiq_fifo_clear_err(pipe->config.axi_fifo_index);
 }
@@ -95,13 +69,13 @@ void afe_pipe_abort(afe_pipeline_t *pipe) {
     axiq_fifo_disable(pipe->config.axi_fifo_index); // enter DMA flush mode
     dmac_abort(dma_mask);
     WAIT_FOR(!dmac_is_running(dma_mask), VSPA_DEFAULT_TIMEOUT);
-    timer_trig_immediate(pipe->config.phytimer_id, ePhyTimerComparatorOut0);
+    timer_trig_immediate_async(pipe->config.phytimer_id, ePhyTimerComparatorOut0);
     dmac_clear_complete(dma_mask);
     dmac_clear_event(dma_mask);
 }
 
 // @return true if AXIQ FIFO has overrun, and samples were lost
-bool axiq_fifo_errors(afe_pipeline_t *pipe) {
+uint32_t axiq_fifo_errors(afe_pipeline_t *pipe) {
     const uint8_t field_shift = axiq_sr_shift(pipe->config.axi_fifo_index);
 
     // Check AXIQ rx fifo is not full or overrun

@@ -48,13 +48,9 @@ enum ePhyTimerComparatorTrigger {
 void phy_tmr_enable(void);
 void phy_tmr_configure(void);
 
-uint16_t timer_trig_immediate(uint32_t id, enum ePhyTimerComparatorTrigger trigger);
-uint32_t timer_trig_immediate_async(uint32_t id, enum ePhyTimerComparatorTrigger trigger);
-uint16_t timer_trig_schedule(uint32_t id, enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp);
-uint16_t timer_trig_schedule_async(uint32_t id, enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp);
-
-void check_timer_dma(void);
-void stream_trig_schedule_async(enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp);
-void timers_trig_schedule(const uint16_t *timer_ids, const uint16_t *triggers, const uint32_t *phytimes, uint16_t count);
+void timer_wait_dma_complete(void);
+void timer_trig_immediate_async(uint16_t id, enum ePhyTimerComparatorTrigger trigger);
+void timer_trig_schedule_async(uint16_t id, enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp);
+void stream_trig_schedule_async(uint32_t timestamp);
 
 #endif // LIME_TIMER_CONTROL_H

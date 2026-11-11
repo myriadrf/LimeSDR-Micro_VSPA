@@ -80,10 +80,10 @@ typedef struct InterpolatorCascade {
 typedef struct InterpolationPipeline {
     // cascade[0] is the only cascade up to INT_EXPONENT_PER_CASCADE, else it is the first (input side) one
     interpolator_cascade_t cascade[INT_CASCADES_COUNT];
-    cfixed16_t *cascade_output; // first cascade output block (INT_CASCADE_BUFFER_COUNT), in work memory
-    cfixed16_t *scratch; // output of the intermediate stage within the last cascade (INT_SCRATCH_COUNT), in work memory
     uint16_t cascade_remaining; // samples of cascade_output not yet consumed by the last cascade
     uint16_t interpolate_exponent; // copy of the channel's config, latched on lane prime
+    cfixed16_t *cascade_output; // first cascade output block (INT_CASCADE_BUFFER_COUNT), in work memory
+    cfixed16_t *scratch; // output of the intermediate stage within the last cascade (INT_SCRATCH_COUNT), in work memory
 } interpolation_pipeline_t;
 
 extern interpolation_pipeline_t int_pipe[TX_MAX_LANE_COUNT];
@@ -101,7 +101,10 @@ static inline uint16_t interpolation_input_count(const interpolation_pipeline_t 
 void interpolation_setup(interpolation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *work);
 
 // Clears the filters' state and drops the buffered intermediate samples, for a discontinuity in the input
-void interpolation_clear(interpolation_pipeline_t *pipe);
+static inline void interpolation_clear(interpolation_pipeline_t *pipe) {
+    // struct member special layout for single memset clearing
+    memset16(pipe->cascade, 0, sizeof(pipe->cascade) + sizeof(pipe->cascade_remaining));
+}
 
 // Produces INT_OUTPUT_COUNT samples into dest by the pipeline's exponent (1..MAX_INTERPOLATION_EXPONENT).
 // src points at the input samples of this output: interpolation_input_count() of them, DMEM line aligned. Successive calls

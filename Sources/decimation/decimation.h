@@ -66,27 +66,30 @@ typedef struct DecimatorCascade {
 } decimator_cascade_t;
 
 typedef struct DecimationPipeline {
-    decimator_cascade_t cascade[DEC_CASCADES_COUNT];
-    // output of a cascade accumulated until the following cascade has enough input, processed there in place
 #if DEC_CASCADES_COUNT > 1
-    cfixed16_t cascade_output[DEC_CASCADES_COUNT - 1][DEC_CASCADE_BUFFER_COUNT] _VSPA_VECTOR_ALIGN;
+    // output of a cascade accumulated until the following cascade has enough input, processed there in place
+    cfixed16_t cascade_output[DEC_CASCADES_COUNT - 1][DEC_CASCADE_BUFFER_COUNT] _VSPA_VECTOR_ALIGN; // don't need clearing
+#endif
+    decimator_cascade_t cascade[DEC_CASCADES_COUNT];
+    uint16_t samples_produced; // valid samples in output buffer
+#if DEC_CASCADES_COUNT > 1
     uint16_t cascade_produced[DEC_CASCADES_COUNT - 1]; // valid samples in cascade_output
 #endif
-    cfixed16_t *output; // final decimation output destination
-    uint16_t samples_produced; // valid samples in output buffer
     uint16_t decimate_exponent; // copy of the selected channel's config, latched on channel select and lane prime
 } decimation_pipeline_t;
 
 extern decimation_pipeline_t dec_pipe[RX_MAX_LANE_COUNT];
 
-void decimation_clear(decimation_pipeline_t *pipe);
-static inline void decimate_output_consume(decimation_pipeline_t *pipe) { pipe->samples_produced = 0; }
+static inline void decimation_clear(decimation_pipeline_t *pipe) {
+    // struct members specially layout for single memset clearing
+    memset16(pipe->cascade, 0, sizeof(pipe->cascade) + sizeof(pipe->samples_produced) * DEC_CASCADES_COUNT);
+}
 
-static inline void decimate_set_output_buffer(decimation_pipeline_t *pipe, cfixed16_t *dest) { pipe->output = dest; }
+static inline void decimate_output_consume(decimation_pipeline_t *pipe) { pipe->samples_produced = 0; }
 
 // Decimates src_count (DEC_INPUT_COUNT) samples by the pipeline's exponent, src is overwritten (processed in place).
 // Appends output to the output buffer and advances samples_produced, which can stay unchanged while
 // the second cascade is accumulating input.
-void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *src, uint16_t src_count);
+void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *dest, cfixed16_t *src, uint16_t src_count);
 
 #endif // LIME_VSPA_OVERSAMPLE_H

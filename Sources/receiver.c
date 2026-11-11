@@ -114,7 +114,7 @@ static inline void rx_ddr_pipe_reset(rx_ddr_pipeline_t *rx, cfixed16_t *buffer) 
     tcd_fifo_reset(&rx->output_blocks);
     rx->wip_tcd_output = tcd_fifo_back(&rx->output_blocks);
     dma_tcd_reset(rx->wip_tcd_output);
-    memset16(ddr->meta, 0, sizeof(ddr->meta));
+    // memset16(ddr->meta, 0, sizeof(ddr->meta));
 
     const uint32_t dma_mask = (1 << ddr->dma_channel);
     dmac_abort(dma_mask);
@@ -272,7 +272,6 @@ static void rx_resync(uint16_t lane) {
     uint32_t start_phytime;
     uint32_t lead = RX_RESYNC_LEAD_TICKS;
     for (uint16_t attempt = 0;; ++attempt, lead <<= 1) {
-        timer_trig_immediate(afe->config.phytimer_id, ePhyTimerComparatorOut0); // stop samples entering FIFO
         afe_axiq_fifo_reset(afe);
         rx_adc_pipe_reset(adc, adc_buffer[lane]);
         initial_adc_enq(afe);
@@ -280,15 +279,15 @@ static void rx_resync(uint16_t lane) {
         if (attempt == RX_RESYNC_MAX_ATTEMPTS) {
             // Could not schedule in time, start immediately and estimate the time
             const uint32_t before_phytime = phytime_now();
-            timer_trig_immediate(afe->config.phytimer_id, ePhyTimerComparatorOut1);
+            timer_trig_immediate_async(afe->config.phytimer_id, ePhyTimerComparatorOut1);
             start_phytime = before_phytime + ((phytime_now() - before_phytime) >> 1);
             break;
         }
 
         const uint32_t start_offset = ((phytime_now() + lead - stream_origin_phyticks) + align_mask) & ~align_mask;
         start_phytime = stream_origin_phyticks + start_offset;
-        timer_trig_schedule(afe->config.phytimer_id, ePhyTimerComparatorOut1, start_phytime);
-
+        timer_trig_schedule_async(afe->config.phytimer_id, ePhyTimerComparatorOut1, start_phytime);
+        timer_wait_dma_complete();
         // Comparator triggers only on equality, if start time has already passed it might have been missed.
         if ((int32_t)(phytime_now() - start_phytime) < 0)
             break;
@@ -331,30 +330,27 @@ void adc_dma_complete(uint16_t lane) {
     decimation_pipeline_t *const dec = &dec_pipe[lane];
     cfixed16_t *const dest = ddr_next_enq_buffer(ddr);
     TRACE_START_DURATION(t2);
+    if (dec->samples_produced == 0) {
+        rx->buf_timestamp = phyticks_to_ts(buffer_time, dec_pipe[lane].decimate_exponent, adc_clock_divider_disabled[lane]);
+    }
+    rx_qec_correction(completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
+
+    cfixed16_t *buffer_to_scale;
     if (dec->decimate_exponent) {
-        if (dec->samples_produced == 0) {
-            rx->buf_timestamp = phyticks_to_ts(buffer_time, dec_pipe[lane].decimate_exponent, adc_clock_divider_disabled[lane]);
-            decimate_set_output_buffer(dec, dest);
-        }
         // in place processing
-        rx_qec_correction(completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
-        decimate_work(dec, completed_buffer, ADC_XFER_SAMPLE_COUNT);
-        TRACE_DURATION(T_RX_WORK, DEFAULT_THREAD_ID, t2);
-        if (dec->samples_produced >= DDR_XFER_SAMPLE_COUNT) {
-            rhf_rhf_rsp_vMultiSclr_asm(dest, dest, &downscalefactor[lane], DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
-            if (dmac_is_complete(1 << ddr->dma_channel))
-                rx_ddr_dma_complete(lane);
-            rx_lane_try_ddr_enqueue(lane, dest, rx->buf_timestamp);
-            decimate_output_consume(dec);
-        }
+        decimate_work(dec, dest + dec->samples_produced, completed_buffer, ADC_XFER_SAMPLE_COUNT);
+        buffer_to_scale = dest;
     } else {
-        // process into ddr buffer
-        rx_qec_correction(dest, completed_buffer, ADC_DMEM_LINES_COUNT);
-        rhf_rhf_rsp_vMultiSclr_asm(dest, dest, &downscalefactor[lane], ADC_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
-        TRACE_DURATION(T_RX_WORK, DEFAULT_THREAD_ID, t2);
+        dec->samples_produced = DDR_XFER_SAMPLE_COUNT;
+        buffer_to_scale = completed_buffer;
+    }
+    TRACE_DURATION(T_RX_WORK, DEFAULT_THREAD_ID, t2);
+    if (dec->samples_produced >= DDR_XFER_SAMPLE_COUNT) {
+        rhf_rhf_rsp_vMultiSclr_asm(dest, buffer_to_scale, &downscalefactor[lane], DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         if (dmac_is_complete(1 << ddr->dma_channel))
             rx_ddr_dma_complete(lane);
-        rx_lane_try_ddr_enqueue(lane, dest, phyticks_to_ts(buffer_time, dec->decimate_exponent, adc_clock_divider_disabled[lane]));
+        rx_lane_try_ddr_enqueue(lane, dest, rx->buf_timestamp);
+        decimate_output_consume(dec);
     }
 
     // ADC self perpetuating, reenque new tranfer on each completion
@@ -402,7 +398,7 @@ void receiver_init(void) {
 void rx_lane_prime(uint16_t lane) {
     adc_pipeline_t *const adc = &rx_adc[lane];
     afe_pipeline_t *const afe = &rx_adc[lane].afe;
-    timer_trig_immediate(afe->config.phytimer_id, ePhyTimerComparatorOut0);
+    timer_trig_immediate_async(afe->config.phytimer_id, ePhyTimerComparatorOut0);
 
     dec_pipe[lane].decimate_exponent = rx_channel_cfg[adc->channel].decimate_pow2;
     rx_adc_pipe_reset(&rx_adc[lane], adc_buffer[lane]);
@@ -429,7 +425,6 @@ static nco_correlator_t hann_terms[NCO_HANN_TERMS];
 cfloat32_t hann_sum;
 
 cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
-    return 0;
     uint16_t lane = 0;
     rx_select_channel(lane, channel);
 
@@ -437,7 +432,7 @@ cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
     rx_lane_prime(lane);
     ProcessTxDMA(); // for Tx tone generation
     initial_adc_enq(&rx_adc[lane].afe);
-    timer_trig_immediate(3, ePhyTimerComparatorOut1);
+    timer_trig_immediate_async(3, ePhyTimerComparatorOut1);
     afe_pipeline_t *const afe = &rx_adc[lane].afe;
 
     const uint16_t fft_size = ADC_XFER_SAMPLE_COUNT;

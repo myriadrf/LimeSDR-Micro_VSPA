@@ -4,7 +4,7 @@
 #include "decimation.h"
 
 // Filter coefficients, must be gain normalized
-static const float rx_filter_taps_downsampling[8] __attribute__((aligned(64))) = {
+static const float rx_filter_taps_downsampling[8] _VSPA_VECTOR_ALIGN = {
 #include "fir_decimation_x2_x4.txt"
 };
 
@@ -36,15 +36,7 @@ void decimate_cascade(decimator_cascade_t *dec, cfixed16_t *dest, cfixed16_t *sr
     } while (decimate_exponent > 0);
 }
 
-void decimation_clear(decimation_pipeline_t *pipe) {
-    memset16(pipe->cascade, 0, sizeof(pipe->cascade));
-#if DEC_CASCADES_COUNT > 1
-    memset16(pipe->cascade_produced, 0, sizeof(pipe->cascade_produced));
-#endif
-    pipe->samples_produced = 0;
-}
-
-void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *src, uint16_t src_count) {
+void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *dest, cfixed16_t *src, uint16_t src_count) {
 #if DEC_CASCADES_COUNT > 1
     uint16_t exponent = pipe->decimate_exponent;
 
@@ -58,7 +50,7 @@ void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *src, uint16_t src_co
 
         if (exponent == 0) {
             // last cascade puts result into final buffer
-            decimate_cascade(&pipe->cascade[cas], pipe->output + pipe->samples_produced, src, src_count, step);
+            decimate_cascade(&pipe->cascade[cas], dest, src, src_count, step);
             pipe->samples_produced += produced;
             return;
         }
@@ -78,7 +70,7 @@ void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *src, uint16_t src_co
         pipe->cascade_produced[cas] = 0;
     }
 #else
-    decimate_cascade(&pipe->cascade[0], pipe->output + pipe->samples_produced, src, src_count, pipe->decimate_exponent);
+    decimate_cascade(&pipe->cascade[0], dest, src, src_count, pipe->decimate_exponent);
     pipe->samples_produced += src_count >> pipe->decimate_exponent;
 #endif
 }

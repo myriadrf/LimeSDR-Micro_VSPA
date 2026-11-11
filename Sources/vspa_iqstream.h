@@ -26,11 +26,9 @@ struct VSPA_Stats {
 static bool timeout_happened = false;
 #define WAIT_FOR(cond, timeout_cycles)     \
     do {                                   \
-        timeout_happened = false;          \
         uint32_t timeout = timeout_cycles; \
         do {                               \
         } while (!(cond) && --timeout);    \
-        timeout_happened = timeout == 0;   \
     } while (0)
 
 #endif // LIME_VSPA_IQSTREAM_H

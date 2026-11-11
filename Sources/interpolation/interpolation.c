@@ -45,11 +45,6 @@ static void interpolate_cascade(interpolator_cascade_t *cas, cfixed16_t *dest, c
     } while (exponent > 0);
 }
 
-void interpolation_clear(interpolation_pipeline_t *pipe) {
-    memset16(pipe->cascade, 0, sizeof(pipe->cascade));
-    pipe->cascade_remaining = 0;
-}
-
 void interpolation_setup(interpolation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *work) {
     pipe->interpolate_exponent = exponent;
     pipe->cascade_output = work;

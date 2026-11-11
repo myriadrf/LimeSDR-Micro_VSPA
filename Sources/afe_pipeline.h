@@ -42,13 +42,13 @@ typedef struct AFE_pipeline {
     axiq_config_t config;
     uint32_t count_dmac_enque;
     uint32_t count_dmac_complete;
-    uint16_t ovr;
-    uint16_t udr;
     union {
         // naming convenience depending on pipeline direction
         uint32_t buffers_prepared;
         uint32_t buffers_consumed;
     };
+    uint16_t ovr;
+    uint16_t udr;
 } afe_pipeline_t;
 
 static inline void rx_axiq_fill_config(axiq_config_t *cfg, uint16_t channel) {
@@ -74,7 +74,7 @@ void afe_axiq_fifo_clear_err(enum axiq_fifo_e fifo);
 void afe_axiq_fifo_reset(afe_pipeline_t *pipe);
 
 // @return true if AXIQ FIFO has overrun, and samples were lost
-bool axiq_fifo_errors(afe_pipeline_t *pipe);
+uint32_t axiq_fifo_errors(afe_pipeline_t *pipe);
 
 void afe_pipe_reset(afe_pipeline_t *pipe, cfixed16_t *buffer);
 void afe_pipe_abort(afe_pipeline_t *pipe);

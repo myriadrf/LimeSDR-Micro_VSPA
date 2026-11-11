@@ -133,7 +133,7 @@ static inline void stream_start_now(uint32_t phytime, bool specific_time) {
         const uint32_t phytime_now = gpird(4); // Phytimer
         stream_origin_phyticks = phytime_now + 256;
     }
-    stream_trig_schedule_async(ePhyTimerComparatorOut1, stream_origin_phyticks);
+    stream_trig_schedule_async(stream_origin_phyticks);
     rx_stream_started();
 }
 
@@ -298,7 +298,7 @@ static inline void ProcessMBox(void) {
 #define GO_REASON_HOST (1 << 0)
 
 void ProcessTxDMA(void) {
-    if (dmac_is_complete(1 << 7) || dmac_event(1 << 7))
+    if (dmac_is_complete(1 << 7))
         tx_ddr_complete(0);
     tx_check_axiq_status();
     if (dmac_event(1 << 11))
