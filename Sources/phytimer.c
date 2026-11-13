@@ -72,7 +72,7 @@ void timer_trig_immediate_async(uint16_t id, enum ePhyTimerComparatorTrigger tri
     scratch_buf_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
     scratch_buf_values[1] = trigger << 2;
 
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, VSPA_HALF_WORDS(scratch_buf_addrs), VSPA_HALF_WORDS(scratch_buf_values));
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, ADDR8(scratch_buf_addrs), ADDR8(scratch_buf_values));
 }
 
 void timer_trig_schedule_async(uint16_t id, enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp) {
@@ -84,7 +84,7 @@ void timer_trig_schedule_async(uint16_t id, enum ePhyTimerComparatorTrigger trig
     scratch_buf_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
     scratch_buf_values[1] = trigger;
     scratch_buf_values[2] = timestamp;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 3, VSPA_HALF_WORDS(scratch_buf_addrs), VSPA_HALF_WORDS(scratch_buf_values));
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 3, ADDR8(scratch_buf_addrs), ADDR8(scratch_buf_values));
 }
 
 static const uint32_t stream_start_addrs[9] = { PHY_TMR_SC_ADDR(1), PHY_TMR_SC_ADDR(2),  PHY_TMR_SC_ADDR(3),
@@ -109,5 +109,5 @@ void stream_trig_schedule_async(uint32_t timestamp) {
     stream_start_values[7] = timestamp;
     stream_start_values[8] = timestamp;
 
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 9, VSPA_HALF_WORDS(stream_start_addrs), VSPA_HALF_WORDS(stream_start_values));
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 9, ADDR8(stream_start_addrs), ADDR8(stream_start_values));
 }

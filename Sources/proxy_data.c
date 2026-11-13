@@ -15,8 +15,7 @@ bool proxy_dirty = false;
 static uint32_t proxy_memory_offset = INVALID_ADDRESS;
 
 lime_Result proxy_set_address(uint32_t la9310_mem_addr) {
-    if (la9310_mem_addr < BASE_PCIE1_TARGET ||
-        (la9310_mem_addr + VSPA_HALF_WORDS(sizeof(proxy_data_t))) > (BASE_PCIE1_TARGET + SIZE_PCIE1_TARGET))
+    if (la9310_mem_addr < BASE_PCIE1_TARGET || (la9310_mem_addr + SIZEOF8(proxy_data_t)) > (BASE_PCIE1_TARGET + SIZE_PCIE1_TARGET))
         return lime_Result_OutOfRange;
     proxy_memory_offset = la9310_mem_addr - BASE_PCIE1_TARGET;
     return lime_Result_Success;
@@ -32,8 +31,8 @@ void proxy_post(void) {
     if (!dmac_is_available(1 << PROXY_DMA_CHANNEL))
         return;
 
-    dmac_enable(DMAC_WR | PROXY_DMA_CHANNEL, VSPA_HALF_WORDS(sizeof(proxy)),
-                BASE_PCIE1_TARGET + (proxy_memory_offset % SIZE_PCIE1_TARGET), VSPA_HALF_WORDS(&proxy));
+    dmac_enable(DMAC_WR | PROXY_DMA_CHANNEL, SIZEOF8(proxy), BASE_PCIE1_TARGET + (proxy_memory_offset % SIZE_PCIE1_TARGET),
+                SIZEOF8(&proxy));
 
     proxy_dirty = false;
     TRACE_DURATION(T_PROXY, DEFAULT_THREAD_ID, t1);

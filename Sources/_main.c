@@ -213,13 +213,13 @@ uint64_t HandleCommand(uint64_t msg64) {
         break;
 
     case MBOX_OPC_GET_FEATURES_MAP: {
-        return (MAKEDWORD(VSPA_HALF_WORDS(features_map), lime_Result_Success));
+        return (MAKEDWORD(ADDR8(features_map), lime_Result_Success));
     }
     case MBOX_OPC_RX_FFT: {
         const uint32_t freq_ctrl_word = msg_lsb;
         const uint16_t channel = msg_msb & 0x3;
         const uint32_t output_address = (uint32_t)rx_dft_measure((e_rx_channel)channel, freq_ctrl_word);
-        return (MAKEDWORD(VSPA_HALF_WORDS(output_address), lime_Result_Success));
+        return (MAKEDWORD(ADDR8(output_address), lime_Result_Success));
     }
     case MBOX_OPC_STREAM_START: {
         const uint32_t phytime = msg_lsb;

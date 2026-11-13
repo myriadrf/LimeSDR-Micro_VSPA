@@ -140,7 +140,7 @@ static inline void schedule_dac_start(const tx_tdd_config_t *tdd, uint32_t phyti
     tx_timer_values[7] = tdd->rf_sw_on_comparator_out;
     tx_timer_values[8] = phytime + tdd->rf_sw_on;
     const uint16_t count = tdd->rf_sw_on_comparator_out == ePhyTimerComparatorNoChange ? 6 : 9;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, ADDR8(tx_timer_addrs), ADDR8(tx_timer_values));
 }
 
 // DAC AXIQ transfers have minimum size requirements, therefore it's disable phytime might be past the amount
@@ -158,14 +158,14 @@ static inline void schedule_dac_end(const tx_tdd_config_t *tdd, uint32_t phytime
     tx_timer_values[7] = tdd->rf_sw_off_comparator_out;
     tx_timer_values[8] = rf_switch_phytime + tdd->rf_sw_off;
     const uint16_t count = tdd->rf_sw_off_comparator_out == ePhyTimerComparatorNoChange ? 6 : 9;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, ADDR8(tx_timer_addrs), ADDR8(tx_timer_values));
 }
 
 static void dac_stop_immediate() {
     phytmr_dma_wait_free();
     // tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
     tx_timer_values[1] = ePhyTimerComparatorOut0 << 2;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, VSPA_HALF_WORDS(tx_timer_addrs), VSPA_HALF_WORDS(tx_timer_values));
+    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, ADDR8(tx_timer_addrs), ADDR8(tx_timer_values));
 }
 
 // @brief Attempt to enque all available DDR buffers (free ring slots, at most MAX_DMA_ENQ reads in flight)

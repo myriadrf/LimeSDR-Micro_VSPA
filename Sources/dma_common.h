@@ -5,6 +5,7 @@
 #define DMA_COMMON_H
 
 #include "dmac.h"
+#include "chip.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -24,34 +25,31 @@
 
 #define MAX_DMA_ENQ 2
 
-#define DDR_WR_DMA_CHANNEL_5 0x0
+#define DDR_WR_DMA_CHANNEL_5 DMAC_CHAN_0
 
-#define RO0_ADC_RD_DMA_CHANNEL 0x1
-#define RO1_ADC_RD_DMA_CHANNEL 0x2
-#define RX0_ADC_RD_DMA_CHANNEL 0x3
-#define RX1_ADC_RD_DMA_CHANNEL 0x4
+#define RO0_ADC_RD_DMA_CHANNEL DMAC_CHAN_1
+#define RO1_ADC_RD_DMA_CHANNEL DMAC_CHAN_2
+#define RX0_ADC_RD_DMA_CHANNEL DMAC_CHAN_3
+#define RX1_ADC_RD_DMA_CHANNEL DMAC_CHAN_4
 
-#define AUX_ADC_RD_DMA_CHANNEL 0x5
-#define RSSI_RD_DMA_CHANNEL 0x6
+#define AUX_ADC_RD_DMA_CHANNEL DMAC_CHAN_5
+#define RSSI_RD_DMA_CHANNEL DMAC_CHAN_6
 
-#define DDR_RD_DMA_CHANNEL_1 0x7
-#define DDR_RD_DMA_CHANNEL_2 0x8
-#define DDR_RD_DMA_CHANNEL_3 0x9
-#define DDR_RD_DMA_CHANNEL_4 0xa
+#define DDR_RD_DMA_CHANNEL_1 DMAC_CHAN_7
+#define DDR_RD_DMA_CHANNEL_2 DMAC_CHAN_8
+#define DDR_RD_DMA_CHANNEL_3 DMAC_CHAN_9
+#define DDR_RD_DMA_CHANNEL_4 DMAC_CHAN_10
 
-#define TX_DAC_WR_DMA_CHANNEL 0xb
+#define TX_DAC_WR_DMA_CHANNEL DMAC_CHAN_11
 
-#define DDR_WR_DMA_CHANNEL_1 0xc
-#define DDR_WR_DMA_CHANNEL_2 0xd
-#define DDR_WR_DMA_CHANNEL_3 0xe
-#define DDR_WR_DMA_CHANNEL_4 0xf
+#define DDR_WR_DMA_CHANNEL_1 DMAC_CHAN_12
+#define DDR_WR_DMA_CHANNEL_2 DMAC_CHAN_13
+#define DDR_WR_DMA_CHANNEL_3 DMAC_CHAN_14
+#define DDR_WR_DMA_CHANNEL_4 DMAC_CHAN_15
 
 #define DMEM_LINE_SIZE_BYTES 128 // 1024 bits
 
 #define VSPA_DEFAULT_TIMEOUT 4000
-
-// VSPA addresing is in 16bit granularity
-#define VSPA_HALF_WORDS(x) ((uint32_t)x << 1)
 
 // VSPA addresses in half words (16bits), DMA uses bytes (8bits)
 #define VCPU_ADDR_FOR_DMA(x) (((uint32_t)x) << 1)
