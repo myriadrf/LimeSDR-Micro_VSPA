@@ -88,8 +88,8 @@ unit private (*){
 	MEMORY {
 		.vpram 					("rx") 0 : org = 0x0;
 		.ipram 					("rx") 3 : org = 0x0;
-		.vdram 					("rw") 1 : org = 0 ;
-		.idram 					("rw") 2 : org = IPPU_DRAM_start; //, len = IPPU_DRAMSize;
+		.vdram 					("rw") 1 : org = VCPU_DRAM_start;
+		.idram 					("rw") 2 : org = IPPU_DRAM_start, len = IPPU_DRAMSize;
 		//.idram_overlay_space 	("rw") 2 : AFTER(.idram);
 		//.buglinker			    ("rw") 2 : org = 0x8000, len = 0x4000;
 		
@@ -99,7 +99,7 @@ unit private (*){
 		vcpu_dram_to_overlay_1 	("rw") 6 : org = DDR_DATA_OVERLAY_Start;
 		vcpu_dram_to_overlay_2 	("rw") 6 : AFTER(vcpu_dram_to_overlay_1);
 		
-		memory_stack_and_heap 	("rw") 2 : org = StackStart , len = StackSize + HeapSize;
+		memory_stack_and_heap 	("rw") 1 : org = StackStart , len = StackSize + HeapSize;
 	}
 	
 	SECTIONS {
