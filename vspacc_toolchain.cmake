@@ -7,8 +7,8 @@ endif()
 set(TOOLCHAINS_STORAGE_DIR "${CMAKE_SOURCE_DIR}/artifacts")
 
 # Use system defined tools if available, otherwise download locally
-if(DEFINED ENV{"VSPA_TOOL"})
-    set(VSPA_TOOLCHAIN_DIR ENV{"VSPA_TOOL"})
+if(DEFINED ENV{VSPA_TOOL} AND NOT "$ENV{VSPA_TOOL}" STREQUAL "")
+    set(VSPA_TOOLCHAIN_DIR "$ENV{VSPA_TOOL}")
 else()
     set(VSPA_DOWNLOAD_URL "https://www.nxp.com/lgfiles/sdk/la1224/imx-la9310-sdk-10/cwvspa.vbeta_14_00_781_vspa.linux.tgz")
     set(VSPA_PACKAGE "cwvspa.vbeta_14_00_781_vspa.linux.tar.xz")
