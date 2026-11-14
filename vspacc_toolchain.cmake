@@ -4,7 +4,7 @@ if (VSPA_TOOLS_CONFIGURED)
     return()
 endif()
 
-set(TOOLCHAINS_STORAGE_DIR "${CMAKE_SOURCE_DIR}/artifacts")
+set(TOOLCHAINS_STORAGE_DIR "${CMAKE_CURRENT_LIST_DIR}/artifacts")
 
 # Use system defined tools if available, otherwise download locally
 if(DEFINED ENV{VSPA_TOOL} AND NOT "$ENV{VSPA_TOOL}" STREQUAL "")
@@ -77,8 +77,10 @@ set(CMAKE_C_ARCHIVE_CREATE "<CMAKE_AR> -cr <TARGET> <LINK_FLAGS> <OBJECTS>") # r
 # C compiler
 set(CMAKE_C_COMPILER_ARCHITECTURE_ID ${AVAILABLE_ARCHITECTURES})
 set(CMAKE_C_COMPILER ${TOOLCHAIN_BIN_DIR}/fsvspacc${TOOLCHAIN_EXT})
-set(CMAKE_C_COMPILER_WORKS ON) # TODO verify by compiling simple code from VSPA_TOOL/etc/*/Sources
 set(CMAKE_C_FLAGS "${VSPA_LICENSE_ARG} -arch ${VSPA_ARCH} -au_count ${VSPA_AU_COUNT} -core_type ${VSPA_CORE_TYPE} -env ${VSPA_TOOLCHAIN_DIR} -L ${TOOLCHAIN_LIB_DIR} ${CMAKE_C_FLAGS}")
+# compile .s/.sx assembly as C sources (fsvspacc handles them)
+set(CMAKE_USER_MAKE_RULES_OVERRIDE_C ${CMAKE_CURRENT_LIST_DIR}/vspacc_rules_override.cmake)
+
 
 # Don't really need to override the COMPILE_OBJECT arguments, BUT
 # if -o argument specifies the output filename, intermediate text files are generated in current working directory
