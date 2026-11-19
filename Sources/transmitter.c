@@ -34,6 +34,7 @@ extern uint32_t stream_origin_phyticks;
 float upscalefactor[TX_MAX_LANE_COUNT]; // when user sample format is only 12bit full scale, upscale to 16bits full scale
 
 static const uint32_t reschedule_time = DAC_XFER_SAMPLE_COUNT / 2;
+#define TX_LATE_TCD_DROP_MAX 64 // late TCDs dropped per call, bounds the time spent away from the main loop
 // Order: DAC DMA allowed, PA_EN, RF switch. The RF switch comparator (RFCTL_0) is written last so that it can be left
 // out: on LimeSDR-Micro v1+ it is the Tx band switch (TX_SW), which LimeSDR_Micro::SetAntenna sets with a forced output.
 // Re-programming it, even with "no change", disables it first, and that drops the forced output to 0.
@@ -277,9 +278,32 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *tx, bool vcpu_trig) {
 
     dma_tcd_t *tcd;
     tx_meta_t *ddr_meta;
+    uint16_t late_tcds = 0;
     do {
         tcd = tcd_fifo_front(&ddr->dma.tcd_table);
-        // TODO: drop tcds that are already late
+        // Drop TCDs that are already late as a whole, without reading them from the host. Otherwise every late buffer
+        // is read, converted and only then dropped at the DAC stage, one per main loop pass: the pipeline works off
+        // the backlog at real-time rate and a host delay of a few ms keeps Tx off the air for tens of ms.
+        if ((tcd->flags & IQSTREAM_HAS_TIMESTAMP) && late_tcds < TX_LATE_TCD_DROP_MAX) {
+            const uint32_t end_phytime =
+                ts_to_phytime(tcd->timestamp_lsb + (tcd->size >> 2), int_ratio_pow2[0]) + stream_origin_phyticks;
+            if ((int32_t)(end_phytime - phytime_now()) < (int32_t)reschedule_time) {
+                tcd_fifo_pop(&ddr->dma.tcd_table);
+                ++ddr->dma.tcd_table.done;
+                ++proxy.tx_dma_done;
+                ++proxy.tx_drop;
+                proxy_dirty = true;
+                ++tx_stats.dfe_drop;
+                vspa_to_host_signal(ddr->dma.vth_tcd_done_flag_mask);
+                // the START of the burst may have been in a dropped TCD: start at the first buffer that is in time
+                if (!tx_dac[0].in_progress)
+                    tx_dac[0].force_start = true;
+                ++late_tcds;
+                if (tcd_fifo_size(&ddr->dma.tcd_table) == 0)
+                    return;
+                continue;
+            }
+        }
         ddr_meta = tx_ddr_next_enq_meta(tx);
 
         // phytimer stream start offset will be applied right before scheduling.
