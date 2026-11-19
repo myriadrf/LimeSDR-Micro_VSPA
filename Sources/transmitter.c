@@ -87,6 +87,7 @@ struct TxWindowStats {
     uint32_t go1_fallback; // windows closed by the phytime check because no GO_1 event came
     uint32_t end_late; // END was already in the past when it was scheduled (the compare can never match)
     uint32_t phytmr_busy; // a raw phytimer DMA found the channel still busy after the timeout
+    uint32_t end_missed; // GO_1 came but Tx allowed was still high: the END compare did not fire, forced low
 } tx_window_stats;
 
 // The DAC start/end/stop schedules write the comparators with a raw DMA on PHY_TMR_DMA_CHAN, the channel the
@@ -851,6 +852,14 @@ void tx_external_trigger(void) {
     // closed it must not end the following transmission.
     if (dac->in_progress && dac->end_scheduled) {
         ++tx_window_stats.go1_ext;
+        // GO_1 is scheduled after the END compare. If Tx allowed is still high here, the END compare did not fire
+        // (the comparators match on equality only, and the END is scheduled just one or two DAC buffers ahead, so
+        // its value can pass before the write completes). Without a falling edge the next START has no rising edge:
+        // its DAC transfers would wait for their trigger for ever (Tx stall with no underrun and nothing dropped).
+        if (is_tx_dma_allowed()) {
+            ++tx_window_stats.end_missed;
+            dac_stop_immediate();
+        }
         tx_window_closed(dac);
     }
     // need to clear trigger, go event is triggered only by rising edge
