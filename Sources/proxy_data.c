@@ -32,7 +32,7 @@ void proxy_post(void) {
         return;
 
     dmac_enable(DMAC_WR | PROXY_DMA_CHANNEL, SIZEOF8(proxy), BASE_PCIE1_TARGET + (proxy_memory_offset % SIZE_PCIE1_TARGET),
-                SIZEOF8(&proxy));
+                ADDR8(proxy));
 
     proxy_dirty = false;
     TRACE_DURATION(T_PROXY, DEFAULT_THREAD_ID, t1);
