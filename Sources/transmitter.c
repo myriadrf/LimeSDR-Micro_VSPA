@@ -662,6 +662,15 @@ static inline void tx_handle_dac_underrun(void) {
     tx_stats.afe_drop += afe_dac_buffers_in_use(afe);
     proxy.tx_drop += afe_dac_buffers_in_use(afe);
     afe_axiq_fifo_reset(afe);
+    // The aborted DAC transfers never complete: without clearing the counters the pipeline stays "full" and no further
+    // DDR buffer is moved to the DAC.
+    afe->count_dmac_enque = 0;
+    afe->count_dmac_complete = 0;
+    afe->buffers_prepared = 0;
+    // afe_axiq_fifo_reset() leaves the Tx AXIQ FIFO disabled (falling edge = flush mode): enable it again, as
+    // tx_lane_prime() does, otherwise the restarted burst is never clocked out.
+    TxAXIQ(true);
+    afe_axiq_fifo_clear_err(afe->config.axi_fifo_index);
 
     dac->in_progress = false;
     dac->end_scheduled = false;
