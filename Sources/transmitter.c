@@ -427,6 +427,8 @@ static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
             TRACE_COUNTER(CNT_DAC_PHYTIME_ADVANCE, tsAdvance);
             if (tsAdvance < reschedule_time || tsAdvance > 0x7FFFFFFFu) {
                 ++tx_stats.afe_drop;
+                ++proxy.tx_drop; // visible to the host: without this its statistics show no loss for a dropped burst start
+                proxy_dirty = true;
                 --afe->buffers_prepared;
                 // The dropped buffer carried the burst's START. Without it the following buffers of the burst would be
                 // enqueued with no DAC start scheduled and wait for ever (Tx stall). Start the burst at its first buffer
