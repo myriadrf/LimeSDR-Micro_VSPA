@@ -218,6 +218,7 @@ static void tx_ddr_reset(tx_ddr_pipeline_t *tx, cfixed16_t *buffer) {
     ddr_pipe_reset(&tx->ddr, buffer);
     tx->enq_slot = tx->cpl_slot = tx->consumed_slot = 0;
     tx->ready_buffer_offset = 0;
+    tx->flush_remaining = 0;
     // memset16(tx->meta, 0, sizeof(tx->meta));
 
     const uint32_t dma_mask = (1 << tx->ddr.dma_channel);
@@ -336,6 +337,7 @@ void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *tx, bool vcpu_trig) {
     tcd->timestamp_lsb += DDR_XFER_SAMPLE_COUNT;
 
     ddr_meta->flags = tcd->flags;
+    ddr_meta->samples = xfer_size >> 2;
     tcd->flags &= ~(IQSTREAM_TRX_START); // clear start tag once used
 
     if (tcd->size == 0) {
@@ -464,6 +466,17 @@ static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
     dac_enque(pipe, afe_next_enq_buffer(afe), dac_dma_flags);
 }
 
+// DAC buffers of zero input needed after the burst's last DDR buffer, so that the interpolator outputs the whole response
+// to the burst's samples. Without them the samples still in the filters' history are never output and the DAC holds its
+// last value instead (e.g. at x2 the last 8 samples of a burst that ends within 8 samples of a DDR buffer's end).
+static uint8_t tx_interpolation_flush_count(uint16_t exponent, uint16_t samples) {
+    const int32_t outputs_past_buffer = ((int32_t)samples << exponent) + interpolation_tail_count(exponent) -
+                                        ((int32_t)DDR_XFER_SAMPLE_COUNT << exponent);
+    if (outputs_past_buffer <= 0)
+        return 0;
+    return (outputs_past_buffer + DAC_XFER_SAMPLE_COUNT - 1) / DAC_XFER_SAMPLE_COUNT;
+}
+
 static void ddr_to_dac_work(uint16_t lane) {
     TRACE_START_DURATION(t1);
     tx_ddr_pipeline_t *const tx = &txddr[lane];
@@ -492,7 +505,23 @@ static void ddr_to_dac_work(uint16_t lane) {
         ddr_meta->phytime += DAC_XFER_SAMPLE_COUNT;
         dac_meta->flags &= ~IQSTREAM_TRX_END;
         TRACE_DURATION(T_TX_WORK, DEFAULT_THREAD_ID, t1);
-        if (tx->ready_buffer_offset >= DDR_XFER_SAMPLE_COUNT) {
+        bool consumed = tx->ready_buffer_offset >= DDR_XFER_SAMPLE_COUNT;
+        if (tx->flush_remaining > 0) {
+            // this output was interpolated from the zeroed buffer
+            if (consumed)
+                tx->ready_buffer_offset = 0; // still all zeros, keep reading it
+            consumed = --tx->flush_remaining == 0;
+        } else if (consumed && (ddr_meta->flags & IQSTREAM_TRX_END)) {
+            // Burst's last DDR buffer: if its samples are still in the filters' history, keep the buffer as zero input
+            // for the outputs that flush them, and END the burst with the last of those outputs instead of this one.
+            tx->flush_remaining = tx_interpolation_flush_count(int_ratio_pow2[lane], ddr_meta->samples);
+            if (tx->flush_remaining > 0) {
+                memset16(ddr_src, 0, DDR_XFER_SAMPLE_COUNT * sizeof(cfixed16_t));
+                tx->ready_buffer_offset = 0;
+                consumed = false;
+            }
+        }
+        if (consumed) {
             ++tx->ddr.buffers_consumed;
             tx->consumed_slot = tx_ddr_next_slot(tx, tx->consumed_slot);
             TRACE_COUNTER(CNT_TX_DDR_READY, ddr_tx_buffers_ready(&tx->ddr));
@@ -595,6 +624,7 @@ static void tx_drop_ddr(uint16_t lane) {
     ddr->buffers_consumed = 0;
     tx->enq_slot = tx->cpl_slot = tx->consumed_slot = 0;
     tx->ready_buffer_offset = 0;
+    tx->flush_remaining = 0;
     memset16(tx->meta, 0, sizeof(tx->meta));
     interpolation_clear(&int_pipe[lane]);
 }
@@ -718,6 +748,7 @@ static inline void tx_handle_dac_underrun(void) {
             tx->consumed_slot = tx_ddr_next_slot(tx, tx->consumed_slot);
             tx_lane_try_ddr_enqueue(tx, true);
             tx->ready_buffer_offset = 0;
+            tx->flush_remaining = 0; // a dropped burst end needs no flush
             interpolation_clear(&int_pipe[lane]); // samples buffered from the dropped buffer must not be output
             TRACE_COUNTER(CNT_TX_DDR_READY, ddr_tx_buffers_ready(ddr));
             continue;

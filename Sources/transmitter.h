@@ -23,6 +23,7 @@ typedef struct TxChannelConfig {
 typedef struct TxBufferMetaData {
     uint32_t phytime;
     uint32_t flags;
+    uint16_t samples; // DDR buffer: samples the host provided, the rest of the buffer is zero padding
 } tx_meta_t;
 
 // Tx DDR (host memory) read ring. The DAC needs a new 512-sample buffer every 16.7 us at 30.72 MS/s; with 2 ring
@@ -41,6 +42,9 @@ typedef struct TxDDR_lane {
     uint8_t cpl_slot; // ring slot of the next DDR read to complete (count_dmac_complete mod ring_len)
     uint8_t consumed_slot; // ring slot of the oldest ready buffer (buffers_consumed mod ring_len)
     uint8_t ring_len; // slots in use, TX_DDR_RING or less when the interpolator takes slots as its work memory
+    // DAC buffers still to interpolate from zero input at a burst's end, to output the samples held in the interpolator's
+    // filter history. While non-zero, the burst's last DDR buffer stays the current ready buffer, zeroed as their input.
+    uint8_t flush_remaining;
 } tx_ddr_pipeline_t;
 
 static inline uint8_t tx_ddr_next_slot(const tx_ddr_pipeline_t *tx, uint8_t slot) {

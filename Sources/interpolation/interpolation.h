@@ -96,6 +96,10 @@ static inline uint16_t interpolation_input_count(const interpolation_pipeline_t 
     return INT_OUTPUT_COUNT >> pipe->interpolate_exponent;
 }
 
+// Output samples, at the interpolated rate, by which the response to an input sample extends past that sample's own
+// outputs (2^exponent of them): the filters' history has to be flushed with zero input for this many outputs at a burst's end.
+uint16_t interpolation_tail_count(uint16_t exponent);
+
 // Latches the exponent and clears the filters' state.
 // work: INT_WORK_MEMORY_COUNT samples, DMEM line aligned. Needed only when interpolation_needs_work_memory(exponent).
 void interpolation_setup(interpolation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *work);

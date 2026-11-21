@@ -45,6 +45,33 @@ static void interpolate_cascade(interpolator_cascade_t *cas, cfixed16_t *dest, c
     } while (exponent > 0);
 }
 
+// Both kernels are causal 16 taps per output phase: y[n] depends on the stage input x[n-15]..x[n], so a stage's output lags
+// the response to its last input sample by 15 input samples.
+#define INT_KERNEL_HISTORY 15
+
+uint16_t interpolation_tail_count(uint16_t exponent) {
+    // stages in the order interpolate_work() runs them: the first cascade (if any), then the last one; x4 stages first
+    uint16_t cascade_exponents[2] = { 0, exponent };
+#if INT_CASCADES_COUNT > 1
+    if (exponent > INT_EXPONENT_PER_CASCADE) {
+        cascade_exponents[0] = exponent - INT_EXPONENT_PER_CASCADE;
+        cascade_exponents[1] = INT_EXPONENT_PER_CASCADE;
+    }
+#endif
+    uint16_t tail = 0;
+    uint16_t done = 0; // exponent applied before the stage
+    for (uint16_t c = 0; c < 2; ++c) {
+        uint16_t remaining = cascade_exponents[c];
+        while (remaining > 0) {
+            const uint16_t step_pow2 = (remaining >= 2) ? 2 : 1;
+            tail += INT_KERNEL_HISTORY << (exponent - done); // stage input samples, in final output samples
+            done += step_pow2;
+            remaining -= step_pow2;
+        }
+    }
+    return tail;
+}
+
 void interpolation_setup(interpolation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *work) {
     pipe->interpolate_exponent = exponent;
     pipe->cascade_output = work;
