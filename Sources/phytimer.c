@@ -13,9 +13,7 @@
 
 #include "l1-trace.h"
 #include "vspa_iqstream.h"
-
-#define PHY_TMR_DMA_CHAN DDR_WR_DMA_CHANNEL_5
-#define PHY_TMR_DMA_CHAN_MASK (1 << PHY_TMR_DMA_CHAN)
+#include "iqstream_signals.h"
 
 #define BIT(x) (1 << x)
 
@@ -56,35 +54,44 @@
 //     dmac_clear_complete(PHY_TMR_DMA_CHAN_MASK);
 // }
 
-static uint32_t scratch_buf_addrs[3] = { 0 };
-static uint32_t scratch_buf_values[3] = { 0 };
-
-void timer_wait_dma_complete(void) {
-    WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
-    dmac_clear_complete(PHY_TMR_DMA_CHAN_MASK);
-}
+phytimer_data_t phytimer_data;
 
 void timer_trig_immediate_async(uint16_t id, enum ePhyTimerComparatorTrigger trigger) {
-    timer_wait_dma_complete();
+    timer_wait_done();
 
-    scratch_buf_addrs[0] = PHY_TMR_SC_ADDR(id);
-    scratch_buf_addrs[1] = scratch_buf_addrs[0];
-    scratch_buf_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    scratch_buf_values[1] = trigger << 2;
+    if (PHYTIMERS_THROUGH_M4) {
+        phytimer_data.m4_args.timer_id = id;
+        phytimer_data.m4_args.trig_value = trigger;
+        phytimer_data.m4_args.cmd = M4_PHYTIME_CMD_IMMEDIATE;
+        vspa_to_host_signal(1 << 16);
+    } else {
+        phytimer_data.scratch.addrs[0] = PHY_TMR_SC_ADDR(id);
+        phytimer_data.scratch.addrs[1] = phytimer_data.scratch.addrs[0];
+        phytimer_data.scratch.values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
+        phytimer_data.scratch.values[1] = trigger << 2;
 
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, ADDR8(scratch_buf_addrs), ADDR8(scratch_buf_values));
+        dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, ADDR8(phytimer_data.scratch.addrs), ADDR8(phytimer_data.scratch.values));
+    }
 }
 
 void timer_trig_schedule_async(uint16_t id, enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp) {
-    timer_wait_dma_complete();
-    scratch_buf_addrs[0] = PHY_TMR_SC_ADDR(id);
-    scratch_buf_addrs[1] = scratch_buf_addrs[0];
-    scratch_buf_addrs[2] = PHY_TMR_V_ADDR(id);
+    timer_wait_done();
+    if (PHYTIMERS_THROUGH_M4) {
+        phytimer_data.m4_args.phytime = timestamp;
+        phytimer_data.m4_args.timer_id = id;
+        phytimer_data.m4_args.trig_value = trigger;
+        phytimer_data.m4_args.cmd = M4_PHYTIME_CMD_SCHEDULE;
+        vspa_to_host_signal(1 << 16);
+    } else {
+        phytimer_data.scratch.addrs[0] = PHY_TMR_SC_ADDR(id);
+        phytimer_data.scratch.addrs[1] = phytimer_data.scratch.addrs[0];
+        phytimer_data.scratch.addrs[2] = PHY_TMR_V_ADDR(id);
 
-    scratch_buf_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    scratch_buf_values[1] = trigger;
-    scratch_buf_values[2] = timestamp;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 3, ADDR8(scratch_buf_addrs), ADDR8(scratch_buf_values));
+        phytimer_data.scratch.values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
+        phytimer_data.scratch.values[1] = trigger;
+        phytimer_data.scratch.values[2] = timestamp;
+        dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 3, ADDR8(phytimer_data.scratch.addrs), ADDR8(phytimer_data.scratch.values));
+    }
 }
 
 static const uint32_t stream_start_addrs[9] = { PHY_TMR_SC_ADDR(1), PHY_TMR_SC_ADDR(2),  PHY_TMR_SC_ADDR(3),
@@ -102,7 +109,7 @@ static uint32_t stream_start_values[9] = { PHY_TIMER_COMPARATOR_DISABLE | PHY_TI
                                            0 };
 
 void stream_trig_schedule_async(uint32_t timestamp) {
-    timer_wait_dma_complete();
+    timer_wait_done();
     // only do Rx triggers, Tx will be scheduled by host
     stream_start_values[5] = timestamp;
     stream_start_values[6] = timestamp;

@@ -22,6 +22,7 @@ set(COMMON_IQPLAYER_SOURCE
     iqstream_signals.c
     phytimer.c
     proxy_data.c
+    tdd.c
     conversion.sx
     nco_correlator.sx
     tone_generator.sx

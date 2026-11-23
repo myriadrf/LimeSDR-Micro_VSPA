@@ -50,7 +50,7 @@ void afe_axiq_fifo_reset(afe_pipeline_t *pipe) {
 
     WAIT_FOR(dmac_is_complete(dma_mask), VSPA_DEFAULT_TIMEOUT);
     timer_trig_immediate_async(pipe->config.phytimer_id, ePhyTimerComparatorOut0);
-    timer_wait_dma_complete();
+    timer_wait_done();
     dma_clear_all_bits(dma_mask);
     afe_axiq_fifo_clear_err(pipe->config.axi_fifo_index);
 }

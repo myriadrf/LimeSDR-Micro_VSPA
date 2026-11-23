@@ -16,9 +16,7 @@
 #include "vspa_iqstream.h"
 #include "phytimer.h"
 #include "proxy_data.h"
-
-#define PHY_TMR_DMA_CHAN 0
-#define PHY_TMR_DMA_CHAN_MASK (1 << PHY_TMR_DMA_CHAN)
+#include "tdd.h"
 
 #define TX_DAC_FIFO_BEAT_COUNT 16
 #define dac_axi_fifo_addr (0x4400B000) // + 0x1000 - TX_DAC_FIFO_BEAT_COUNT * 16) // axi_DAC_FIFO_addr
@@ -35,27 +33,6 @@ float upscalefactor[TX_MAX_LANE_COUNT]; // when user sample format is only 12bit
 
 static const uint32_t reschedule_time = DAC_XFER_SAMPLE_COUNT / 2;
 #define TX_LATE_TCD_DROP_MAX 64 // late TCDs dropped per call, bounds the time spent away from the main loop
-// Order: DAC DMA allowed, PA_EN, RF switch. The RF switch comparator (RFCTL_0) is written last so that it can be left
-// out: on LimeSDR-Micro v1+ it is the Tx band switch (TX_SW), which LimeSDR_Micro::SetAntenna sets with a forced output.
-// Re-programming it, even with "no change", disables it first, and that drops the forced output to 0.
-static const uint32_t tx_timer_addrs[9] = {
-    // DAC DMA
-    PHY_TMR_SC_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED),
-    PHY_TMR_V_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED),
-    // PA_EN
-    PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_5), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_5), PHY_TMR_V_ADDR(PHY_TIMER_COMP_RFCTL_5),
-    // RF switch
-    PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_V_ADDR(PHY_TIMER_COMP_RFCTL_0)
-};
-static uint32_t tx_timer_values[9] = { PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
-                                       0,
-                                       0,
-                                       PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
-                                       0,
-                                       0,
-                                       PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
-                                       0,
-                                       0 };
 
 // in VCPU DMEM: the IPPU DMEM holds the ADC buffers and the DDR read ring
 // When the interpolator needs work memory (more than one kernel stage, x8 and up), the ring's last TX_DDR_RING_INT_SLOTS
@@ -90,14 +67,6 @@ struct TxWindowStats {
     uint32_t end_missed; // GO_1 came but Tx allowed was still high: the END compare did not fire, forced low
 } tx_window_stats;
 
-// The DAC start/end/stop schedules write the comparators with a raw DMA on PHY_TMR_DMA_CHAN, the channel the
-// timer_trig_*() helpers use as well. dmac_enable() on a channel that is still running is lost, so wait for it.
-static inline void phytmr_dma_wait_free(void) {
-    WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
-    if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
-        ++tx_window_stats.phytmr_busy;
-}
-
 // when DAC clock divider is disabled, 1 PHYtimer tick can represent only >=2 samples period
 static const uint16_t dac_clock_divider_disabled = 0; // TODO: read from config registers
 
@@ -130,45 +99,7 @@ static inline tx_meta_t *dac_next_free_meta(dac_pipeline_t *pipe) { return &pipe
 
 static inline tx_meta_t *dac_next_complete_meta(dac_pipeline_t *pipe) { return &pipe->meta[pipe->afe.count_dmac_complete & 0x1]; }
 
-static inline void schedule_dac_start(const tx_tdd_config_t *tdd, uint32_t phytime) {
-    phytmr_dma_wait_free();
-    // tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[1] = ePhyTimerComparatorOut1;
-    tx_timer_values[2] = phytime + tdd->dac_allowed;
-    // tx_timer_values[3] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[4] = tdd->pa_on_comparator_out;
-    tx_timer_values[5] = phytime + tdd->pa_on;
-    // tx_timer_values[6] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[7] = tdd->rf_sw_on_comparator_out;
-    tx_timer_values[8] = phytime + tdd->rf_sw_on;
-    const uint16_t count = tdd->rf_sw_on_comparator_out == ePhyTimerComparatorNoChange ? 6 : 9;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, ADDR8(tx_timer_addrs), ADDR8(tx_timer_values));
-}
-
-// DAC AXIQ transfers have minimum size requirements, therefore it's disable phytime might be past the amount
-// of RF samples that were provided. The RF switch toggle phytime should be at the actual end of RF samples
-// to cut off padded samples.
-static inline void schedule_dac_end(const tx_tdd_config_t *tdd, uint32_t phytime, uint32_t rf_switch_phytime) {
-    phytmr_dma_wait_free();
-    // tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[1] = ePhyTimerComparatorOut0;
-    tx_timer_values[2] = phytime + tdd->dac_allowed;
-    // tx_timer_values[3] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[4] = tdd->pa_off_comparator_out;
-    tx_timer_values[5] = phytime + tdd->pa_off;
-    // tx_timer_values[6] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[7] = tdd->rf_sw_off_comparator_out;
-    tx_timer_values[8] = rf_switch_phytime + tdd->rf_sw_off;
-    const uint16_t count = tdd->rf_sw_off_comparator_out == ePhyTimerComparatorNoChange ? 6 : 9;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, count, ADDR8(tx_timer_addrs), ADDR8(tx_timer_values));
-}
-
-static void dac_stop_immediate() {
-    phytmr_dma_wait_free();
-    // tx_timer_values[0] = PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT;
-    tx_timer_values[1] = ePhyTimerComparatorOut0 << 2;
-    dmac_enable(DMAC_DI32 | PHY_TMR_DMA_CHAN, 2, ADDR8(tx_timer_addrs), ADDR8(tx_timer_values));
-}
+static inline void dac_stop_immediate() { timer_trig_immediate_async(PHY_TIMER_COMP_CH5_TX_ALLOWED, ePhyTimerComparatorOut0); }
 
 // @brief Attempt to enque all available DDR buffers (free ring slots, at most MAX_DMA_ENQ reads in flight)
 static void tx_initial_ddr_enque(tx_ddr_pipeline_t *tx) {
@@ -402,7 +333,7 @@ static inline void dac_schedule_end(dac_pipeline_t *pipe, const tx_meta_t *dac_m
         ++tx_window_stats.end_late;
         dac_stop_immediate();
     } else
-        schedule_dac_end(&tx_tdd, dac_off_phytime, dac_off_phytime);
+        tx_tdd_schedule_end(&tx_tdd, dac_off_phytime, dac_off_phytime);
     pipe->end_scheduled = true;
 
     // current transmission window is active, and phytimers might be scheduled to trigger it's end.
@@ -410,7 +341,7 @@ static inline void dac_schedule_end(dac_pipeline_t *pipe, const tx_meta_t *dac_m
     // last DAC buffer DMA completion event triggers some time before the actual end of transmission,
     // so it cannot be used as phytimer rescheduling point. Need to schedule a dedicated GO event which
     // would trigger right after the actual transmission end and phytimers are done.
-    pipe->end_go_phytime = dac_off_phytime + DAC_XFER_SAMPLE_COUNT;
+    pipe->end_go_phytime = dac_off_phytime;
     // GO_1 fires on a rising edge only: make sure the previous window's Out1 was cleared
     timer_trig_immediate_async(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut0);
     timer_trig_schedule_async(PHY_TIMER_COMP_VSPA_GO_1, ePhyTimerComparatorOut1, pipe->end_go_phytime);
@@ -441,7 +372,7 @@ static inline void dac_enq_pending_buffer(dac_pipeline_t *pipe) {
         } else // transmit immediately
             tx_start_phytime = phytime_now() + reschedule_time;
 
-        schedule_dac_start(&tx_tdd, tx_start_phytime);
+        tx_tdd_schedule_start(&tx_tdd, tx_start_phytime);
         TRACE_EVENT(T_TX_BURST_START, 3, dac_meta->phytime);
         pipe->in_progress = true;
         pipe->start_phytime = tx_start_phytime;

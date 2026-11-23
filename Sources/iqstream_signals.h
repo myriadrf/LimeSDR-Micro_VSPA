@@ -1,6 +1,8 @@
 #ifndef LIME_IQSTREAM_SIGNALS_H
 #define LIME_IQSTREAM_SIGNALS_H
 
+#include "iohw.h"
+
 #include <stdint.h>
 
 // Host to VSPA flags
@@ -31,10 +33,11 @@ enum VTH_Signal {
     VTH_SIGNAL_RXLANE3_TCD_DONE = (1 << 8),
     VTH_SIGNAL_TXLANE0_TCD_DONE = (1 << 14),
     VTH_SIGNAL_TXLANE0_COMPLETE = (1 << 15),
+    VTH_SIGNAL_TDD_SCHEDULE_START = (1 << 16),
     VTH_SIGNAL_ERROR = (1 << 31),
 };
 
-void clear_htv_signal(uint32_t mask);
-void vspa_to_host_signal(uint32_t flags);
+static inline void clear_htv_signal(uint32_t mask) { iowr(HOST_VCPU_FLAGS0, mask); }
+static inline void vspa_to_host_signal(uint32_t flags) { iowr(VCPU_HOST_FLAGS0, flags); }
 
 #endif // LIME_IQSTREAM_SIGNALS_H

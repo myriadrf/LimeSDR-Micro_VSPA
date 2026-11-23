@@ -287,7 +287,7 @@ static void rx_resync(uint16_t lane) {
         const uint32_t start_offset = ((phytime_now() + lead - stream_origin_phyticks) + align_mask) & ~align_mask;
         start_phytime = stream_origin_phyticks + start_offset;
         timer_trig_schedule_async(afe->config.phytimer_id, ePhyTimerComparatorOut1, start_phytime);
-        timer_wait_dma_complete();
+        timer_wait_done();
         // Comparator triggers only on equality, if start time has already passed it might have been missed.
         if ((int32_t)(phytime_now() - start_phytime) < 0)
             break;

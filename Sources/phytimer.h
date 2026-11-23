@@ -4,7 +4,18 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "vspa_iqstream.h"
+#include "dma_common.h"
+#include "iohw.h"
 #include "phy-timer.h"
+
+// Use M4 core to configure phytimers by reading arguments from VSPA memory.
+// Time wise same cycles duration to completion (cycles count fluctuates depending on bus load in both cases)
+// Reduces PRAM usage.
+#define PHYTIMERS_THROUGH_M4 0
+
+#define PHY_TMR_DMA_CHAN DDR_WR_DMA_CHANNEL_5
+#define PHY_TMR_DMA_CHAN_MASK (1 << PHY_TMR_DMA_CHAN)
 
 #define PHY_TIMER_COMP_VSPA_GO_0 0
 #define PHY_TIMER_COMP_CH1_RX_ALLOWED 1
@@ -45,6 +56,32 @@ enum ePhyTimerComparatorTrigger {
     ePhyTimerComparatorOutToggle,
 };
 
+enum M4_PHYTIME_CMD {
+    M4_PHYTIME_CMD_IMMEDIATE,
+    M4_PHYTIME_CMD_SCHEDULE,
+    M4_PHYTIME_CMD_TDD_START,
+    M4_PHYTIME_CMD_TDD_END,
+};
+
+typedef struct phytimer_ctrl_m4 {
+    uint32_t phytime;
+    struct {
+        uint32_t cmd : 8; // M4_PHYTIME_CMD_*
+        uint32_t timer_id : 8;
+        uint32_t trig_value : 2;
+    };
+} m4_phytimer_t;
+
+typedef union {
+    m4_phytimer_t m4_args;
+    struct {
+        uint32_t addrs[3];
+        uint32_t values[3];
+    } scratch;
+} phytimer_data_t;
+
+extern phytimer_data_t phytimer_data;
+
 void phy_tmr_enable(void);
 void phy_tmr_configure(void);
 
@@ -52,5 +89,16 @@ void timer_wait_dma_complete(void);
 void timer_trig_immediate_async(uint16_t id, enum ePhyTimerComparatorTrigger trigger);
 void timer_trig_schedule_async(uint16_t id, enum ePhyTimerComparatorTrigger trigger, uint32_t timestamp);
 void stream_trig_schedule_async(uint32_t timestamp);
+
+static inline void timer_wait_done() {
+    if (PHYTIMERS_THROUGH_M4) {
+        while (iord(VCPU_HOST_FLAGS0) & (1 << 16)) {
+        };
+    } else {
+        WAIT_FOR(!dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK), VSPA_DEFAULT_TIMEOUT);
+        // if (dmac_is_enabled(PHY_TMR_DMA_CHAN_MASK))
+        //     ++tx_window_stats.phytmr_busy;
+    }
+}
 
 #endif // LIME_TIMER_CONTROL_H

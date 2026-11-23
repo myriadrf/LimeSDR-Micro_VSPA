@@ -4,8 +4,6 @@
 #include "vspa_iqstream.h"
 #include "transmitter.h"
 
-void clear_htv_signal(uint32_t mask) { iowr(HOST_VCPU_FLAGS0, mask); }
-
 void HandleCommandFlags(void) {
     uint32_t flags = iord(HOST_VCPU_FLAGS0);
     for (int lane = 0; lane < RX_MAX_LANE_COUNT; ++lane) {
@@ -31,5 +29,3 @@ void HandleCommandFlags(void) {
 
     clear_htv_signal(flags); // clear processed flags
 }
-
-void vspa_to_host_signal(uint32_t flags) { iowr(VCPU_HOST_FLAGS0, flags); }

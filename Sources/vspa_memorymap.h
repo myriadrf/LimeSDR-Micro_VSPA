@@ -26,6 +26,7 @@ typedef enum {
     VSPA_MMAP_RXDDR_OUTPUT_LANE2,
     VSPA_MMAP_RXDDR_OUTPUT_LANE3,
     VSPA_MMAP_FW_INFO,
+    VSPA_MMAP_PHYTIME_SCHED,
 } e_vspa_feature;
 
 typedef struct {

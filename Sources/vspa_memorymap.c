@@ -5,11 +5,13 @@
 #include "transmitter.h"
 #include "vspa_iqstream.h"
 #include "fw_config.h"
+#include "tdd.h"
 
 extern struct ADC_lane rx_adc[];
 extern struct PipeStats rx_stats[];
 extern struct PipeStats tx_stats;
 extern struct VSPA_Stats vspa_core_stats;
+extern struct phytimer_ctrl_m4 m4_phytime_args;
 extern tx_tdd_config_t tx_tdd;
 
 const fw_config_t fw_info = {
@@ -45,5 +47,8 @@ const vspa_feature_t features_map[] __attribute__((section(".mmap_entry"))) = {
     { VSPA_MMAP_VSPA_CORE_STATS, (uint32_t)&vspa_core_stats },
     { VSPA_MMAP_TX_TDD_CONFIG, (uint32_t)&tx_tdd },
     { VSPA_MMAP_FW_INFO, (uint32_t)&fw_info },
+#if PHYTIMERS_THROUGH_M4
+    { VSPA_MMAP_PHYTIME_SCHED, (uint32_t)&phytimer_data.m4_args },
+#endif
     { VSPA_MMAP_NONE, 0 }
 };

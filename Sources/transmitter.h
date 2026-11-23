@@ -68,18 +68,6 @@ typedef struct TxPipeline {
     bool generate_tone;
 } tx_pipeline_t;
 
-typedef struct TxTDD_Config {
-    int16_t dac_allowed;
-    int16_t pa_on : 8;
-    int16_t pa_off : 8;
-    int16_t rf_sw_on : 8;
-    int16_t rf_sw_off : 8;
-    uint16_t rf_sw_on_comparator_out : 2;
-    uint16_t rf_sw_off_comparator_out : 2;
-    uint16_t pa_on_comparator_out : 2;
-    uint16_t pa_off_comparator_out : 2;
-} tx_tdd_config_t;
-
 extern tx_ddr_pipeline_t txddr[TX_MAX_LANE_COUNT];
 extern tone_state_t tx_tone_state[TX_MAX_LANE_COUNT];
 
