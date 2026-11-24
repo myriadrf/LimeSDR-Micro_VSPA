@@ -181,8 +181,6 @@ static inline void initial_adc_enq(afe_pipeline_t *afe) {
     const axiq_config_t *const axiq = afe->config;
 
     axiq_pipe_enable(axiq);
-    // Enabling Rx AXIQ instantly generates underrun error, clear it.
-    axiq_pipe_clear_err(axiq);
 
     // enque two reads
     const uint32_t dma_ctrl = axiq->dmac_ctrl_flags | DMAC_TRIG_VCPU | DMAC_PEND_EXT;
@@ -278,7 +276,6 @@ static void rx_resync(uint16_t pipe) {
     uint32_t start_phytime;
     uint32_t lead = RX_RESYNC_LEAD_TICKS;
     for (uint16_t attempt = 0;; ++attempt, lead <<= 1) {
-        axiq_pipe_reset(afe);
         rx_adc_pipe_reset(adc);
         initial_adc_enq(afe);
 

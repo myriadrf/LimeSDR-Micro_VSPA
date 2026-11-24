@@ -129,14 +129,6 @@ static void tx_initial_ddr_enque(uint16_t pipe) {
     }
 }
 
-static inline void TxAXIQ(bool enabled) {
-    if (enabled) {
-        axiq_tx_enable();
-    } else {
-        axiq_tx_disable();
-    }
-}
-
 static inline bool tx_axiq_is_enabled() {
     return gpord(7, (1 << 0)); // Tx AXIQ enable
 }
@@ -659,8 +651,7 @@ static inline void tx_handle_dac_underrun(void) {
     afe->buffers_prepared = 0;
     // axiq_pipe_reset() leaves the Tx AXIQ FIFO disabled (falling edge = flush mode): enable it again, as
     // tx_lane_prime() does, otherwise the restarted burst is never clocked out.
-    TxAXIQ(true);
-    axiq_pipe_clear_err(afe->config);
+    axiq_pipe_enable(dac->afe.config);
 
     dac->in_progress = false;
     dac->end_scheduled = false;
@@ -711,8 +702,7 @@ void tx_lane_prime(uint16_t pipe) {
 
     tx_dac_reset(dac);
 
-    TxAXIQ(true);
-    axiq_pipe_clear_err(dac->afe.config);
+    axiq_pipe_enable(dac->afe.config);
 
     proxy.tx_udr = 0;
     proxy.tx_drop = 0;
@@ -742,8 +732,7 @@ int tx_tone_enable(uint16_t pipe, bool enable) {
         afe_pipeline_t *const afe = &dac->afe;
         const axiq_config_t *const axiq = afe->config;
         tx_dac_reset(dac);
-        TxAXIQ(true);
-        axiq_pipe_clear_err(axiq);
+        axiq_pipe_enable(dac->afe.config);
 
         // initial work twice to produce two initial DAC buffers
         // no timestamps provided, will start immediately
@@ -804,8 +793,7 @@ void tx_check_axiq_status(void) {
         ddr_to_dac_work(0);
 
     afe_pipeline_t *const axiq = &tx_dac[0].afe;
-    const uint32_t status = axiq_fifo_errors(axiq);
-    if (status & AXIQ_SR_FIELD_ERRUNDER) {
+    if (axiq_fifo_errors(axiq)) {
         ++tx_stats.afe_udr;
         ++proxy.tx_udr;
         proxy_dirty = true;

@@ -30,17 +30,20 @@
 
 // AXIQ FIFO <-> DMEM transfer configuration of a pipe, set when the pipe's channel is selected
 typedef struct AXIQ_Config {
+    uint32_t dmac_ctrl_flags; // DMA transfer control: direction, conversion, handshake, dma_channel
     uint32_t axi_fifo_addr; // AXIQ FIFO address on the AXI bus
     uint16_t dma_channel; // VSPA DMA channel moving the samples between the AXIQ FIFO and DMEM
     uint16_t phytimer_id; // PHY timer comparator gating the FIFO (rx/tx allowed)
-    uint32_t axi_fifo_index; // enum axiq_fifo_e
-    uint32_t dmac_ctrl_flags; // DMA transfer control: direction, conversion, handshake, dma_channel
+    uint16_t cr_shift;
+    uint16_t cr_index;
+    uint16_t sr_shift;
+    uint16_t sr_index;
 } axiq_config_t;
 
 #define AXIQ_CONFIG_RX(fifo_addr, dma_ch, timer, fifo) \
-    { fifo_addr, dma_ch, timer, fifo, DMAC_FIFO_HS | DMAC_RDC | (dma_ch) }
+    { DMAC_FIFO_HS | DMAC_RDC | (dma_ch), fifo_addr, dma_ch, timer }
 #define AXIQ_CONFIG_TX(fifo_addr, dma_ch, timer, fifo) \
-    { fifo_addr, dma_ch, timer, fifo, DMAC_FIFO_HS | DMAC_WRC | (dma_ch) }
+    { DMAC_FIFO_HS | DMAC_WRC | (dma_ch), fifo_addr, dma_ch, timer, AXIQ_CR_SHIFT_TX0, AXIQ_CR3, AXIQ_SR_SHIFT_TX0, AXIQ_SR1 }
 
 // Analog front end state for moving data between DMEM and ADC/DAC AXIQ
 typedef struct AFE_pipeline {
@@ -63,18 +66,18 @@ static inline void rx_axiq_fill_config(axiq_config_t *cfg, uint16_t channel) {
     cfg->axi_fifo_addr = RO0_AXI_FIFO_ADDR + channel * 0x1000;
     cfg->dma_channel = RO0_ADC_RD_DMA_CHANNEL + channel;
     cfg->phytimer_id = PHY_TIMER_COMP_CH1_RX_ALLOWED + channel;
-    cfg->axi_fifo_index = AXIQ_FIFO_RX0 + channel;
+    // cfg->axi_fifo_index = AXIQ_FIFO_RX0 + channel;
     cfg->dmac_ctrl_flags = DMAC_FIFO_HS | DMAC_RDC | (RO0_ADC_RD_DMA_CHANNEL + channel);
+    cfg->cr_index = AXIQ_CR0; // LA9310 same for all Rx channels
+    cfg->sr_index = AXIQ_SR0; // LA9310 same for all Rx channels
+    cfg->cr_shift = AXIQ_CR_SHIFT_RX0 + (channel * 8);
+    cfg->sr_shift = AXIQ_SR_SHIFT_RX0 + (channel * 4);
 }
 
 static inline uint16_t afe_dma_channel(const afe_pipeline_t *pipe) { return pipe->config->dma_channel; }
 
-void axiq_pipe_enable(const axiq_config_t *axiq);
-void axiq_pipe_clear_err(const axiq_config_t *axiq);
-void axiq_pipe_reset(afe_pipeline_t *pipe);
-
-// @return true if AXIQ FIFO has overrun, and samples were lost
-uint32_t axiq_fifo_errors(afe_pipeline_t *pipe);
+// @return true if AXIQ FIFO has overrun/underrun
+bool axiq_fifo_errors(afe_pipeline_t *pipe);
 
 void afe_pipe_reset(afe_pipeline_t *pipe);
 void afe_pipe_abort(afe_pipeline_t *pipe);

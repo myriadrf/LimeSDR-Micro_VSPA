@@ -23,12 +23,18 @@ struct VSPA_Stats {
     uint32_t go_count;
 };
 
-static bool timeout_happened = false;
-#define WAIT_FOR(cond, timeout_cycles)     \
-    do {                                   \
-        uint32_t timeout = timeout_cycles; \
-        do {                               \
-        } while (!(cond) && --timeout);    \
-    } while (0)
+// static bool timeout_happened = false;
+// #define WAIT_FOR(cond, timeout_cycles)     \
+//     do {                                   \
+//         uint32_t timeout = timeout_cycles; \
+//         do {                               \
+//         } while (!(cond) && --timeout);    \
+//     } while (0)
+
+// with the debugger support available, no longer need to do timeouts, to protect against core lock up.
+// Debugger can force restart the firmware
+#define WAIT_FOR(cond, timeout_cycles) \
+    do {                               \
+    } while (!(cond))
 
 #endif // LIME_VSPA_IQSTREAM_H

@@ -5,43 +5,28 @@
 
 static inline bool axiq_fifo_is_tx(enum axiq_fifo_e fifo) { return fifo == AXIQ_FIFO_TX0; }
 
+static inline void axiq_pipe_clear_err(const axiq_config_t *axiq) {
+    iowr(axiq->cr_index, (AXIQ_CR_FIELD_FIFO & AXIQ_CR_CLRERR) << axiq->cr_shift, AXIQ_CR_CLRERR << axiq->cr_shift);
+    iowr(axiq->cr_index, (AXIQ_CR_FIELD_FIFO & AXIQ_CR_CLRERR) << axiq->cr_shift, 0);
+}
+
 void axiq_pipe_enable(const axiq_config_t *axiq) {
-    const enum axiq_fifo_e fifo = (enum axiq_fifo_e)axiq->axi_fifo_index;
-    if (axiq_fifo_is_tx(fifo))
-        axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_ENABLE);
-    else
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_ENABLE);
+    iowr(axiq->cr_index, (AXIQ_CR_FIELD_FIFO & AXIQ_CR_FIELD_ENABLE) << axiq->cr_shift, AXIQ_CR_ENABLE << axiq->cr_shift);
+    // Enabling Rx AXIQ instantly generates underrun error, clear it.
+    axiq_pipe_clear_err(axiq);
 }
 
 static inline void axiq_fifo_disable(const axiq_config_t *axiq) {
-    const enum axiq_fifo_e fifo = (enum axiq_fifo_e)axiq->axi_fifo_index;
-    if (axiq_fifo_is_tx(fifo))
-        axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_DISABLE);
-    else
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_FIELD_ENABLE, AXIQ_CR_DISABLE);
+    iowr(axiq->cr_index, (AXIQ_CR_FIELD_FIFO & AXIQ_CR_FIELD_ENABLE) << axiq->cr_shift, AXIQ_CR_DISABLE << axiq->cr_shift);
 }
 
 static inline uint32_t axiq_fifo_status(const axiq_config_t *axiq) {
-    const enum axiq_fifo_e fifo = (enum axiq_fifo_e)axiq->axi_fifo_index;
-    if (axiq_fifo_is_tx(fifo))
-        return axiq_fifo_tx_sr(AXIQ_BANK_0, fifo, AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER);
-    return axiq_fifo_rx_sr(AXIQ_BANK_0, fifo, AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER);
-}
-
-void axiq_pipe_clear_err(const axiq_config_t *axiq) {
-    const enum axiq_fifo_e fifo = (enum axiq_fifo_e)axiq->axi_fifo_index;
-    if (axiq_fifo_is_tx(fifo)) {
-        axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-        axiq_fifo_tx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, 0);
-    } else {
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, AXIQ_CR_CLRERR);
-        axiq_fifo_rx_cr(AXIQ_BANK_0, fifo, AXIQ_CR_CLRERR, 0);
-    }
+    return iord(axiq->sr_index, (AXIQ_SR_FIELD_FIFO & AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER) << axiq->sr_shift);
 }
 
 void axiq_pipe_reset(afe_pipeline_t *pipe) {
-    axiq_pipe_enable(pipe->config);
     const uint32_t dma_mask = (1 << afe_dma_channel(pipe));
+    axiq_pipe_enable(pipe->config);
     dmac_abort(dma_mask);
 
     axiq_fifo_disable(pipe->config); // falling edge enters flush mode
@@ -55,9 +40,9 @@ void axiq_pipe_reset(afe_pipeline_t *pipe) {
 
     WAIT_FOR(dmac_is_complete(dma_mask), VSPA_DEFAULT_TIMEOUT);
     timer_trig_immediate_async(pipe->config->phytimer_id, ePhyTimerComparatorOut0);
-    timer_wait_done();
+    // timer_wait_done();
     dma_clear_all_bits(dma_mask);
-    axiq_pipe_clear_err(pipe->config);
+    // axiq_pipe_clear_err(pipe->config); // will be cleared on next axiq enable
 }
 
 void afe_pipe_reset(afe_pipeline_t *pipe) {
@@ -79,21 +64,19 @@ void afe_pipe_abort(afe_pipeline_t *pipe) {
 }
 
 // @return true if AXIQ FIFO has overrun, and samples were lost
-uint32_t axiq_fifo_errors(afe_pipeline_t *pipe) {
-    const uint8_t field_shift = axiq_sr_shift((enum axiq_fifo_e)pipe->config->axi_fifo_index);
-
+bool axiq_fifo_errors(afe_pipeline_t *pipe) {
     // Check AXIQ rx fifo is not full or overrun
     uint32_t status = axiq_fifo_status(pipe->config);
     if (status == 0)
         return false;
 
-    status >>= field_shift;
-    if (status & AXIQ_SR_FIELD_ERROVER) {
+    status >>= pipe->config->sr_shift;
+    if (status & (AXIQ_SR_FIELD_ERROVER | AXIQ_SR_FIELD_ERRUNDER)) {
         ++pipe->ovr;
     }
     if (status & AXIQ_SR_FIELD_ERRUNDER) {
         ++pipe->udr;
     }
     axiq_pipe_clear_err(pipe->config);
-    return status;
+    return true;
 }
