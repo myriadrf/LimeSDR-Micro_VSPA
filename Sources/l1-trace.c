@@ -86,15 +86,15 @@ void push_traces(void) {
     {
         uint32_t first_half_size = trace_hif.buffer_size - mem_offset;
         dmac_enable(DMAC_WR | L1_TRACE_DMA_CHANNEL, first_half_size, trace_hif.la9310_mem_address + mem_offset,
-                    ADDR8(&events_buffer[events_active_buffer * L1_TRACE_CAPACITY / 2]));
+                    ADDR8(events_buffer[events_active_buffer * L1_TRACE_CAPACITY / 2]));
 
         uint32_t second_half_size = xfer_size - first_half_size;
         dmac_enable(DMAC_WR | L1_TRACE_DMA_CHANNEL, second_half_size, trace_hif.la9310_mem_address,
-                    ADDR8(&events_buffer[events_active_buffer * L1_TRACE_CAPACITY / 2]) + first_half_size);
+                    ADDR8(events_buffer[events_active_buffer * L1_TRACE_CAPACITY / 2]) + first_half_size);
     } else // contiguous region on host side
     {
         dmac_enable(DMAC_WR | L1_TRACE_DMA_CHANNEL, xfer_size, trace_hif.la9310_mem_address + mem_offset,
-                    ADDR8(&events_buffer[events_active_buffer * L1_TRACE_CAPACITY / 2]));
+                    ADDR8(events_buffer[events_active_buffer * L1_TRACE_CAPACITY / 2]));
     }
     trace_bytes_submitted += xfer_size;
 
