@@ -2,6 +2,7 @@
 // Copyright 2026 Lime Microsystems
 
 #include "receiver.h"
+#include "transmitter.h"
 
 #include "dmac.h"
 #include "dfe.h"
@@ -426,6 +427,7 @@ cfloat32_t hann_sum;
 
 cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
     uint16_t lane = 0;
+    tx_tone_flush(0); // don't measure samples generated before the latest Tx QEC/tone change
     rx_select_channel(lane, channel);
 
     ProcessTxDMA(); // for Tx tone generation

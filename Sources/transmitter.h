@@ -88,6 +88,7 @@ void tx_ddr_complete(uint16_t lane);
 void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *tx, bool vcpu_trig);
 
 int tx_tone_enable(uint16_t lane, bool enable);
+void tx_tone_flush(uint16_t lane);
 void host_submitted_tx_tcd(uint16_t lane);
 void tx_check_axiq_status(void);
 
