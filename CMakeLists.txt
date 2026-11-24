@@ -30,8 +30,8 @@ add_compile_options(
 
 add_link_options(
     $<$<CONFIG:Release>:LINKER:-S> # Strips debug information from the executable object file.
-    $<$<CONFIG:Release>:LINKER:-xd> # Instructs the linker to remove symbols that were emitted by the compiler and assembler for debugging sections.
-    $<$<CONFIG:Release>:LINKER:-x> # Removes all local symbols from the symbol table.
+    $<$<CONFIG:Release>:LINKER:-s> # Strips all symbols (.symtab, .strtab, .mw_info); the loader only needs section names and contents, symbols remain in the .map.
+    $<$<CONFIG:Release>:LINKER:-disable-emit-note> # Omits the .note section (linker version strings).
     LINKER:-enable-stack-effect
     LINKER:-display-section-total
 )
