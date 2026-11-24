@@ -6,9 +6,9 @@
 
 #include "dfe.h"
 
-vspa_qec_params_t rx_qec_params[RX_CHANNEL_COUNT] _VSPA_VECTOR_ALIGN;
-vspa_qec_params_t tx_qec_params[TX_CHANNEL_COUNT] _VSPA_VECTOR_ALIGN;
-structTXIQCompParams qec_work_params _VSPA_VECTOR_ALIGN;
+vspa_qec_params_t rx_qec_params[RX_CHANNEL_COUNT];
+vspa_qec_params_t tx_qec_params[TX_CHANNEL_COUNT];
+structTXIQCompParams qec_work_params DMEM_LINE_HEAD;
 
 static void qec_params_reset(vspa_qec_params_t *params) {
     // ftaps {0, 0, 1, 1}: static IQ imbalance correction is passthrough

@@ -2,6 +2,8 @@
 #define LIME_POSTED_STATS_H
 
 #include "opstatus.h"
+#include "vcpu.h"
+#include "fw_config.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -17,7 +19,7 @@ typedef struct Proxy_Data {
     uint16_t rx_drop;
 } proxy_data_t;
 
-extern proxy_data_t proxy __attribute__((aligned(64)));
+extern proxy_data_t proxy DMEM_LINE_TAIL;
 extern bool proxy_dirty;
 
 lime_Result proxy_set_address(uint32_t addr);

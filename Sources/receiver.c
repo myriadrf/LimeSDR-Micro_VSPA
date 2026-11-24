@@ -40,8 +40,7 @@ static float
     downscalefactor[RX_PIPE_COUNT]; // when user sample format is 12bit fullscale, downscale from ADC 16bit fullscale to 12bit
 
 cfixed16_t adc_buffer[RX_PIPE_COUNT][MAX_DMA_ENQ * ADC_XFER_SAMPLE_COUNT] __attribute__((section(".bss.ippu"))) _VSPA_VECTOR_ALIGN;
-cfixed16_t ddr_write_buffer[RX_PIPE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT]
-    __attribute__((section(".bss.vcpu"))) _VSPA_VECTOR_ALIGN;
+cfixed16_t ddr_write_buffer[RX_PIPE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT] DMEM_LINES;
 
 // Decimation filter state
 

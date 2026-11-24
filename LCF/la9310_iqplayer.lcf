@@ -120,6 +120,9 @@ unit private (*){
 			.mmap_entry
             .vcpu_dmem
 		    __data_start = .;
+			// Line aligned objects first, then unaligned data, see DMEM_LINES in Sources/fw_config.h.
+			".rom.dmem_lines"
+			".rom.dmem_line_head"
 			.rom
 			.rodata
 			unmatch_rom("*");
@@ -130,9 +133,12 @@ unit private (*){
 			"*startup*.eln"(".data");
 			.bsstab
 			__bss_start = .;
+			".bss.dmem_lines"
+			".bss.dmem_line_head"
 			".bss"
 			unmatch_bss("*");
 			".bss.vcpu"
+			".bss.dmem_line_tail"
 			.vbss
 			__end = .;
 			__bss_end = .;

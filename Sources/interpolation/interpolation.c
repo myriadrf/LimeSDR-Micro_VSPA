@@ -4,15 +4,15 @@
 #include "interpolation.h"
 
 // Filter coefficients, in the order the kernels expect (see vspa-lib/inc/filter.h)
-static const float tx_filter_taps_upsampling_x2[32] _VSPA_VECTOR_ALIGN = {
+static const float tx_filter_taps_upsampling_x2[32] DMEM_LINES_CONST = {
 #include "fir_interpolation_x2.txt"
 };
 // same coefficients as x2, just interleaved multiple instances.
-static const float tx_filter_taps_upsampling_x4[128] _VSPA_VECTOR_ALIGN = {
+static const float tx_filter_taps_upsampling_x4[128] DMEM_LINES_CONST = {
 #include "fir_interpolation_x4.txt"
 };
 
-interpolation_pipeline_t int_pipe[TX_PIPE_COUNT];
+interpolation_pipeline_t int_pipe[TX_PIPE_COUNT] DMEM_LINES;
 
 // vspa-lib prototypes
 // X2_interp_tap32_filter: input count multiple of 64 samples, at least 128

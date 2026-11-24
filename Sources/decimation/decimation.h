@@ -77,7 +77,7 @@ typedef struct DecimationPipeline {
 #endif
 } decimation_pipeline_t;
 
-extern decimation_pipeline_t dec_pipe[RX_PIPE_COUNT];
+extern decimation_pipeline_t dec_pipe[RX_PIPE_COUNT] DMEM_LINES;
 
 static inline void decimation_clear(decimation_pipeline_t *pipe) {
     // struct members specially layout for single memset clearing

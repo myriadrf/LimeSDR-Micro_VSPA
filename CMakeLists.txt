@@ -34,8 +34,8 @@ add_link_options(
     $<$<CONFIG:Release>:LINKER:-disable-emit-note> # Omits the .note section (linker version strings).
     LINKER:-enable-stack-effect
     LINKER:-display-section-total
+    LINKER:-enable-display-padding-info
 )
-
 message(STATUS "BUILD_TYPE: " ${CMAKE_BUILD_TYPE})
 
 add_subdirectory(vspa-sdk)

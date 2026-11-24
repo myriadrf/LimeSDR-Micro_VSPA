@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include "ccnt.h"
+#include "fw_config.h"
 
 #define TRACE_ENABLED 0
 #define DEFAULT_THREAD_ID 1
@@ -56,7 +57,7 @@ extern void l1_trace_init(void);
 #if TRACE_ENABLED
 #define L1_TRACE_CAPACITY (128)
 #define L1_TRACE_CAPACITY_MASK (L1_TRACE_CAPACITY - 1)
-extern l1_trace_data_t events_buffer[L1_TRACE_CAPACITY] _VSPA_VECTOR_ALIGN __attribute__((section(".bss.vcpu")));
+extern l1_trace_data_t events_buffer[L1_TRACE_CAPACITY] DMEM_LINES;
 extern l1_trace_hif_t trace_hif;
 extern uint16_t next_event_index;
 extern void l1_trace_clear(void);

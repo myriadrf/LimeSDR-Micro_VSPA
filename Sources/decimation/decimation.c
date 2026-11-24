@@ -4,11 +4,11 @@
 #include "decimation.h"
 
 // Filter coefficients, must be gain normalized
-static const float rx_filter_taps_downsampling[8] _VSPA_VECTOR_ALIGN = {
+static const float rx_filter_taps_downsampling[8] DMEM_LINE_HEAD_CONST = {
 #include "fir_decimation_x2_x4.txt"
 };
 
-decimation_pipeline_t dec_pipe[RX_PIPE_COUNT];
+decimation_pipeline_t dec_pipe[RX_PIPE_COUNT] DMEM_LINES;
 
 // ddc2x4x.sx prototypes
 extern void decimator_2x_8_Taps_asm(cfixed16_t *pOut, volatile cfixed16_t *pIn, const float32_t *pTaps, cfixed16_t *filtState,

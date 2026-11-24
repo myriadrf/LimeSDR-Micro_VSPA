@@ -7,7 +7,7 @@
 
 #define PROXY_DMA_CHANNEL DDR_WR_DMA_CHANNEL_3
 
-proxy_data_t proxy __attribute__((aligned(64)));
+proxy_data_t proxy DMEM_LINE_TAIL;
 bool proxy_dirty = false;
 
 #define INVALID_ADDRESS ((uint32_t)0xFFFFFFFFu)

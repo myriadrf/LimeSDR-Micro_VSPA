@@ -85,7 +85,7 @@ typedef struct InterpolationPipeline {
     cfixed16_t *scratch; // output of the intermediate stage within the last cascade (INT_SCRATCH_COUNT), in work memory
 } interpolation_pipeline_t;
 
-extern interpolation_pipeline_t int_pipe[TX_PIPE_COUNT];
+extern interpolation_pipeline_t int_pipe[TX_PIPE_COUNT] DMEM_LINES;
 
 // More than one kernel stage needs buffers for the intermediate results
 static inline bool interpolation_needs_work_memory(uint16_t exponent) { return exponent > 2; }

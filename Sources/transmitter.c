@@ -42,7 +42,7 @@ static const uint32_t reschedule_time = DAC_XFER_SAMPLE_COUNT / 2;
 #if TX_DDR_RING_INT_SLOTS >= TX_DDR_RING - MAX_DMA_ENQ
 #error "interpolator work memory leaves too few Tx DDR ring slots"
 #endif
-cfixed16_t dac_buffer[TX_PIPE_COUNT][MAX_DMA_ENQ * DAC_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN;
+cfixed16_t dac_buffer[TX_PIPE_COUNT][MAX_DMA_ENQ * DAC_XFER_SAMPLE_COUNT] DMEM_LINES;
 cfixed16_t ddr_read_buffer[TX_PIPE_COUNT][TX_DDR_RING * DDR_XFER_SAMPLE_COUNT] _VSPA_VECTOR_ALIGN
     __attribute__((section(".bss.ippu")));
 

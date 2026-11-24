@@ -14,9 +14,10 @@
 #include "fw_config.h"
 #include "vspa_memorymap.h"
 
-// Per channel QEC parameters, written by host through the features map (VSPA_CHANNEL_RX/TX_QEC_ARRAY)
-extern vspa_qec_params_t rx_qec_params[RX_CHANNEL_COUNT] _VSPA_VECTOR_ALIGN;
-extern vspa_qec_params_t tx_qec_params[TX_CHANNEL_COUNT] _VSPA_VECTOR_ALIGN;
+// Per channel QEC parameters, written by host through the features map (VSPA_CHANNEL_RX/TX_QEC_ARRAY). Not DMEM line
+// aligned: the kernel only reads the line aligned qec_work_params copy.
+extern vspa_qec_params_t rx_qec_params[RX_CHANNEL_COUNT];
+extern vspa_qec_params_t tx_qec_params[TX_CHANNEL_COUNT];
 
 // Sets all channels' QEC to passthrough
 void qec_init(void);
