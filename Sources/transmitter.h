@@ -15,16 +15,19 @@
 
 #include <stdint.h>
 
-// Persistent channel parameters, applied to the lane which streams the channel
-typedef struct TxChannelConfig {
-    uint16_t interpolate_pow2;
-} tx_channel_config_t;
+typedef enum {
+    VSPA_TX0,
+} e_tx_channel;
 
 typedef struct TxBufferMetaData {
     uint32_t phytime;
     uint32_t flags;
     uint16_t samples; // DDR buffer: samples the host provided, the rest of the buffer is zero padding
 } tx_meta_t;
+
+extern axiq_config_t tx_axiq_configs[TX_PIPE_COUNT];
+extern vspa_channel_config_t tx_channel_cfg[TX_CHANNEL_COUNT];
+extern vspa_dma_hif_t tx_hdma[TX_PIPE_COUNT];
 
 // Tx DDR (host memory) read ring. The DAC needs a new 512-sample buffer every 16.7 us at 30.72 MS/s; with 2 ring
 // buffers (33 us) a PCIe read latency spike, or a read rate a little below the sample rate during a long burst, leaves
@@ -35,7 +38,7 @@ typedef struct TxBufferMetaData {
 #define TX_DDR_RING 6
 
 typedef struct TxDDR_lane {
-    ddr_pipeline_t ddr; // its meta[] and wip_tcd are unused, Tx keeps its own meta ring
+    ddr_pipeline_t ddr; // its meta[] is unused, Tx keeps its own meta ring
     tx_meta_t meta[TX_DDR_RING];
     uint16_t ready_buffer_offset;
     uint8_t enq_slot; // ring slot of the next DDR read (count_dmac_enque mod ring_len)
@@ -68,15 +71,13 @@ typedef struct TxPipeline {
     bool generate_tone;
 } tx_pipeline_t;
 
-extern tx_ddr_pipeline_t txddr[TX_MAX_LANE_COUNT];
-extern tone_state_t tx_tone_state[TX_MAX_LANE_COUNT];
+extern tx_ddr_pipeline_t tx_ddr[TX_PIPE_COUNT];
+extern tone_state_t tx_tone_state[TX_PIPE_COUNT];
 
 void transmitter_init(void);
-void tx_lane_setup(uint16_t lane, uint16_t channel);
+// Streams the channel on the pipe
+int tx_select_channel(uint16_t pipe, e_tx_channel channel);
 int tx_set_sample_format(uint16_t lane, iq_sample_format_e format);
-int tx_set_oversampling(uint16_t channel, uint16_t oversample_pow2);
-// @return channel's interpolation as power of 2, or negative lime_Result on error
-int tx_get_oversampling(uint16_t channel);
 
 void tx_lane_ddr_enable(uint16_t lane, bool enable);
 
@@ -85,7 +86,7 @@ void tx_lane_abort(uint16_t lane);
 
 void dac_dma_complete(uint16_t lane);
 void tx_ddr_complete(uint16_t lane);
-void tx_lane_try_ddr_enqueue(tx_ddr_pipeline_t *tx, bool vcpu_trig);
+void tx_lane_try_ddr_enqueue(uint16_t pipe, bool vcpu_trig);
 
 int tx_tone_enable(uint16_t lane, bool enable);
 void tx_tone_flush(uint16_t lane);

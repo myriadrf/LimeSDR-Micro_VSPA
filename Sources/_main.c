@@ -26,7 +26,6 @@
 extern const vspa_feature_t features_map[];
 extern void HandleCommandFlags(void);
 extern void proxy_post(void);
-extern void rf_iq_comp_params_init(void);
 
 struct VSPA_Stats vspa_core_stats;
 
@@ -116,17 +115,10 @@ uint64_t HandleCommand(uint64_t msg64) {
         return (MAKEDWORD(0, rx_select_channel(lane, (e_rx_channel)channel)));
         break;
     }
-    case MBOX_OPC_RX_CONFIGURE: {
-        const uint8_t channel = msg_lsb & 0xFF;
-        const uint8_t ovr_pow2 = (msg_lsb >> 8) & 0xFF;
-        return (MAKEDWORD(0, rx_set_oversampling((e_rx_channel)channel, ovr_pow2)));
-        break;
-    }
-    case MBOX_OPC_TX_CONFIGURE: {
-        const uint8_t channel = msg_lsb & 0xFF;
-        const uint8_t ovr_pow2 = (msg_lsb >> 8) & 0xFF;
-        return (MAKEDWORD(0, tx_set_oversampling(channel, ovr_pow2)));
-        break;
+    case MBOX_OPC_TX_CHAN_SELECT: {
+        const uint8_t pipe = msg_lsb & 0xFF;
+        const uint8_t channel = (msg_lsb >> 8) & 0xFF;
+        return (MAKEDWORD(0, tx_select_channel(pipe, (e_tx_channel)channel)));
     }
     case MBOX_OPC_SET_SAMPLE_FORMAT: {
         const uint8_t lane = msg_lsb & 0xFF;
@@ -135,43 +127,11 @@ uint64_t HandleCommand(uint64_t msg64) {
         return (MAKEDWORD(0, tx ? tx_set_sample_format(lane, format) : rx_set_sample_format(lane, format)));
         break;
     }
-    case MBOX_OPC_RX_GET_CONFIG:
-    case MBOX_OPC_TX_GET_CONFIG: {
-        const uint8_t channel = msg_lsb & 0xFF;
-        const int ovr_pow2 =
-            op_code == MBOX_OPC_RX_GET_CONFIG ? rx_get_oversampling((e_rx_channel)channel) : tx_get_oversampling(channel);
-        if (ovr_pow2 < 0)
-            return (MAKEDWORD(0, ovr_pow2));
-        return (MAKEDWORD(ovr_pow2, lime_Result_Success));
-    }
     case MBOX_OPC_SINGLE_TONE_TX: {
         const uint8_t lane = msg_lsb & 0xFF;
         const bool enable = msg_lsb & (1 << 16);
         return (MAKEDWORD(0, tx_tone_enable(lane, enable)));
         break;
-    }
-    case MBOX_OPC_IQ_CORR: {
-        // QEC param update
-        uint32_t iq_channel_id = ((msg_msb & 0x00030000) >> 16); /* bit49-48 */
-        uint32_t iq_dir_tx = ((msg_msb & 0x00200000) >> 21); /* bit 53 */
-        uint32_t iq_rst = ((msg_msb & 0x00100000) >> 20); /* bit 52 */
-        uint32_t iq_idx = msg_msb & 0x0000FFFF; /* bit 47-32*/
-        uint32_t iq_val = msg_lsb; /* bit 31-0 */
-
-        if (iq_dir_tx) {
-#ifdef TXIQCOMP2
-            rf_update_iq_comp_params2(&iq_comp_params2_tx, iq_rst, iq_idx, iq_val);
-#else
-            rf_update_iq_comp_params(&txiqcompcfg_struct, iq_rst, iq_idx, iq_val);
-#endif
-        } else {
-#ifdef TXIQCOMP2
-            rf_update_iq_comp_params2(&iq_comp_params2_rx, iq_rst, iq_idx, iq_val);
-#else
-            rf_update_iq_comp_params(&rxiqcompcfg_struct, iq_rst, iq_idx, iq_val);
-#endif
-        }
-        return MAKEDWORD(0, 0);
     }
     case MBOX_OPC_DONE_SWRESET:
         SwReset();
@@ -268,7 +228,7 @@ __attribute__((noreturn)) void main_go(void) {
             rx_ddr_dma_complete(0);
         ProcessTxDMA();
 
-        for (int lane = 0; lane < RX_MAX_LANE_COUNT; ++lane) {
+        for (int lane = 0; lane < RX_PIPE_COUNT; ++lane) {
             if (dmac_event(1 << afe_dma_channel(&rx_adc[lane].afe)))
                 adc_dma_complete(lane);
         }
@@ -308,7 +268,7 @@ __attribute__((noreturn)) void main(void) {
     clean_state();
 
     l1_trace_init();
-    rf_iq_comp_params_init();
+    qec_init();
 
     receiver_init();
     transmitter_init();

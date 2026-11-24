@@ -8,7 +8,7 @@ static const float rx_filter_taps_downsampling[8] _VSPA_VECTOR_ALIGN = {
 #include "fir_decimation_x2_x4.txt"
 };
 
-decimation_pipeline_t dec_pipe[RX_MAX_LANE_COUNT];
+decimation_pipeline_t dec_pipe[RX_PIPE_COUNT];
 
 // ddc2x4x.sx prototypes
 extern void decimator_2x_8_Taps_asm(cfixed16_t *pOut, volatile cfixed16_t *pIn, const float32_t *pTaps, cfixed16_t *filtState,
@@ -36,10 +36,8 @@ void decimate_cascade(decimator_cascade_t *dec, cfixed16_t *dest, cfixed16_t *sr
     } while (decimate_exponent > 0);
 }
 
-void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *dest, cfixed16_t *src, uint16_t src_count) {
+void decimate_work(decimation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *dest, cfixed16_t *src, uint16_t src_count) {
 #if DEC_CASCADES_COUNT > 1
-    uint16_t exponent = pipe->decimate_exponent;
-
     // redundant check, caller must ensure that it needs decimation
     // if (exponent == 0)
     //     return;
@@ -70,7 +68,7 @@ void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *dest, cfixed16_t *sr
         pipe->cascade_produced[cas] = 0;
     }
 #else
-    decimate_cascade(&pipe->cascade[0], dest, src, src_count, pipe->decimate_exponent);
-    pipe->samples_produced += src_count >> pipe->decimate_exponent;
+    decimate_cascade(&pipe->cascade[0], dest, src, src_count, exponent);
+    pipe->samples_produced += src_count >> exponent;
 #endif
 }

@@ -11,10 +11,11 @@
 // PHY_TIMER_COMP_RFCTL_4, LMS7002M TXEN pin
 // PHY_TIMER_COMP_RFCTL_0, on board RF switch
 
-// Order: DAC DMA allowed, PA_EN, RF switch. The RF switch comparator (RFCTL_0) is written last so that it can be left
-// out: on LimeSDR-Micro v1+ it is the Tx band switch (TX_SW), which LimeSDR_Micro::SetAntenna sets with a forced output.
-// Re-programming it, even with "no change", disables it first, and that drops the forced output to 0.
-const uint32_t tx_timer_addrs[9] = {
+// Order: DAC DMA allowed (comparator of the selected channel, see tx_tdd_set_dac_allowed_comparator()), PA_EN, RF
+// switch. The RF switch comparator (RFCTL_0) is written last so that it can be left out: on LimeSDR-Micro v1+ it is the
+// Tx band switch (TX_SW), which LimeSDR_Micro::SetAntenna sets with a forced output. Re-programming it, even with
+// "no change", disables it first, and that drops the forced output to 0.
+static uint32_t tx_timer_addrs[9] = {
     // DAC DMA
     PHY_TMR_SC_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED),
     PHY_TMR_V_ADDR(PHY_TIMER_COMP_CH5_TX_ALLOWED),
@@ -23,16 +24,24 @@ const uint32_t tx_timer_addrs[9] = {
     // RF switch
     PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_SC_ADDR(PHY_TIMER_COMP_RFCTL_0), PHY_TMR_V_ADDR(PHY_TIMER_COMP_RFCTL_0)
 };
-uint32_t tx_timer_values[9] = { PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
-                                0,
-                                0,
-                                PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
-                                0,
-                                0,
-                                PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
-                                0,
-                                0 };
+static uint32_t tx_timer_values[9] = { PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
+                                       0,
+                                       0,
+                                       PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
+                                       0,
+                                       0,
+                                       PHY_TIMER_COMPARATOR_DISABLE | PHY_TIMER_COMPARATOR_CLEAR_INT, // const
+                                       0,
+                                       0 };
 // #endif
+
+// The schedule table is shared, which is fine while there is one Tx pipe.
+void tx_tdd_set_dac_allowed_comparator(uint16_t phytimer_id) {
+    timer_wait_done(); // the table may still be in use by a DMA transfer
+    tx_timer_addrs[0] = PHY_TMR_SC_ADDR(phytimer_id);
+    tx_timer_addrs[1] = PHY_TMR_SC_ADDR(phytimer_id);
+    tx_timer_addrs[2] = PHY_TMR_V_ADDR(phytimer_id);
+}
 
 void tx_tdd_schedule_start(const tx_tdd_config_t *tdd, uint32_t phytime) {
     timer_wait_done();

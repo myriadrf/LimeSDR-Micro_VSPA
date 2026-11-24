@@ -75,10 +75,9 @@ typedef struct DecimationPipeline {
 #if DEC_CASCADES_COUNT > 1
     uint16_t cascade_produced[DEC_CASCADES_COUNT - 1]; // valid samples in cascade_output
 #endif
-    uint16_t decimate_exponent; // copy of the selected channel's config, latched on channel select and lane prime
 } decimation_pipeline_t;
 
-extern decimation_pipeline_t dec_pipe[RX_MAX_LANE_COUNT];
+extern decimation_pipeline_t dec_pipe[RX_PIPE_COUNT];
 
 static inline void decimation_clear(decimation_pipeline_t *pipe) {
     // struct members specially layout for single memset clearing
@@ -87,9 +86,9 @@ static inline void decimation_clear(decimation_pipeline_t *pipe) {
 
 static inline void decimate_output_consume(decimation_pipeline_t *pipe) { pipe->samples_produced = 0; }
 
-// Decimates src_count (DEC_INPUT_COUNT) samples by the pipeline's exponent, src is overwritten (processed in place).
-// Appends output to the output buffer and advances samples_produced, which can stay unchanged while
-// the second cascade is accumulating input.
-void decimate_work(decimation_pipeline_t *pipe, cfixed16_t *dest, cfixed16_t *src, uint16_t src_count);
+// Decimates src_count (DEC_INPUT_COUNT) samples by 2^exponent (1..MAX_DECIMATION_EXPONENT), src is overwritten
+// (processed in place). Appends output to the output buffer and advances samples_produced, which can stay unchanged while
+// the second cascade is accumulating input. The exponent must stay the same until decimation_clear().
+void decimate_work(decimation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *dest, cfixed16_t *src, uint16_t src_count);
 
 #endif // LIME_VSPA_OVERSAMPLE_H

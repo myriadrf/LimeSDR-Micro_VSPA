@@ -81,28 +81,25 @@ typedef struct InterpolationPipeline {
     // cascade[0] is the only cascade up to INT_EXPONENT_PER_CASCADE, else it is the first (input side) one
     interpolator_cascade_t cascade[INT_CASCADES_COUNT];
     uint16_t cascade_remaining; // samples of cascade_output not yet consumed by the last cascade
-    uint16_t interpolate_exponent; // copy of the channel's config, latched on lane prime
     cfixed16_t *cascade_output; // first cascade output block (INT_CASCADE_BUFFER_COUNT), in work memory
     cfixed16_t *scratch; // output of the intermediate stage within the last cascade (INT_SCRATCH_COUNT), in work memory
 } interpolation_pipeline_t;
 
-extern interpolation_pipeline_t int_pipe[TX_MAX_LANE_COUNT];
+extern interpolation_pipeline_t int_pipe[TX_PIPE_COUNT];
 
 // More than one kernel stage needs buffers for the intermediate results
 static inline bool interpolation_needs_work_memory(uint16_t exponent) { return exponent > 2; }
 
 // Input samples consumed per interpolate_work() call
-static inline uint16_t interpolation_input_count(const interpolation_pipeline_t *pipe) {
-    return INT_OUTPUT_COUNT >> pipe->interpolate_exponent;
-}
+static inline uint16_t interpolation_input_count(uint16_t exponent) { return INT_OUTPUT_COUNT >> exponent; }
 
 // Output samples, at the interpolated rate, by which the response to an input sample extends past that sample's own
 // outputs (2^exponent of them): the filters' history has to be flushed with zero input for this many outputs at a burst's end.
 uint16_t interpolation_tail_count(uint16_t exponent);
 
-// Latches the exponent and clears the filters' state.
-// work: INT_WORK_MEMORY_COUNT samples, DMEM line aligned. Needed only when interpolation_needs_work_memory(exponent).
-void interpolation_setup(interpolation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *work);
+// Places the work memory and clears the filters' state.
+// work: INT_WORK_MEMORY_COUNT samples, DMEM line aligned. Used only when interpolation_needs_work_memory(exponent).
+void interpolation_setup(interpolation_pipeline_t *pipe, cfixed16_t *work);
 
 // Clears the filters' state and drops the buffered intermediate samples, for a discontinuity in the input
 static inline void interpolation_clear(interpolation_pipeline_t *pipe) {
@@ -110,11 +107,12 @@ static inline void interpolation_clear(interpolation_pipeline_t *pipe) {
     memset16(pipe->cascade, 0, sizeof(pipe->cascade) + sizeof(pipe->cascade_remaining));
 }
 
-// Produces INT_OUTPUT_COUNT samples into dest by the pipeline's exponent (1..MAX_INTERPOLATION_EXPONENT).
+// Produces INT_OUTPUT_COUNT samples into dest by 2^exponent (1..MAX_INTERPOLATION_EXPONENT), which must stay the same
+// until interpolation_clear().
 // src points at the input samples of this output: interpolation_input_count() of them, DMEM line aligned. Successive calls
 // must pass successive input (src advanced by interpolation_input_count()), and with two cascades the first cascade reads
 // ahead up to INT_CASCADE_BUFFER_COUNT >> (exponent - INT_EXPONENT_PER_CASCADE) samples from src, so the input buffer
 // must be a whole multiple of that (512 samples DDR buffers are). Call interpolation_clear() when the input jumps.
-void interpolate_work(interpolation_pipeline_t *pipe, cfixed16_t *dest, cfixed16_t *src);
+void interpolate_work(interpolation_pipeline_t *pipe, uint16_t exponent, cfixed16_t *dest, cfixed16_t *src);
 
 #endif // LIME_VSPA_INTERPOLATION_H

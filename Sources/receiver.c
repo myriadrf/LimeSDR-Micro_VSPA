@@ -35,86 +35,107 @@
 #define RX_RESYNC_LEAD_TICKS 1024
 #define RX_RESYNC_MAX_ATTEMPTS 6
 
-// when DAC clock divider is disabled, 1 PHYtimer tick can represent only >=2 samples period
-static const uint16_t adc_clock_divider_disabled[RX_MAX_LANE_COUNT] = { 0 }; // TODO: read from config registers
-
 extern uint32_t stream_origin_phyticks;
 static float
-    downscalefactor[RX_MAX_LANE_COUNT]; // when user sample format is 12bit fullscale, downscale from ADC 16bit fullscale to 12bit
+    downscalefactor[RX_PIPE_COUNT]; // when user sample format is 12bit fullscale, downscale from ADC 16bit fullscale to 12bit
 
-cfixed16_t adc_buffer[RX_MAX_LANE_COUNT][MAX_DMA_ENQ * ADC_XFER_SAMPLE_COUNT]
-    __attribute__((section(".bss.ippu"))) _VSPA_VECTOR_ALIGN;
-cfixed16_t ddr_write_buffer[RX_MAX_LANE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT]
+cfixed16_t adc_buffer[RX_PIPE_COUNT][MAX_DMA_ENQ * ADC_XFER_SAMPLE_COUNT] __attribute__((section(".bss.ippu"))) _VSPA_VECTOR_ALIGN;
+cfixed16_t ddr_write_buffer[RX_PIPE_COUNT][MAX_DMA_ENQ * DDR_XFER_SAMPLE_COUNT]
     __attribute__((section(".bss.vcpu"))) _VSPA_VECTOR_ALIGN;
 
 // Decimation filter state
 
-tone_state_t rx_generator[RX_MAX_LANE_COUNT];
+tone_state_t rx_generator[RX_PIPE_COUNT];
 
-struct PipeStats rx_stats[RX_MAX_LANE_COUNT];
+struct PipeStats rx_stats[RX_PIPE_COUNT];
 
-rx_ddr_pipeline_t rx_ddr[RX_MAX_LANE_COUNT];
-adc_pipeline_t rx_adc[RX_MAX_LANE_COUNT];
+dma_tcd_fifo_t rx_output_blocks[RX_PIPE_COUNT];
+vspa_dma_hif_t rx_hdma[RX_PIPE_COUNT];
+dma_tcd_t rx_wip_tcd[RX_PIPE_COUNT]; // working copy of input tcd, so the original could be recirculated.
 
-static rx_channel_config_t rx_channel_cfg[RX_CHANNEL_COUNT];
+ddr_pipeline_t rx_ddr[RX_PIPE_COUNT];
+rx_pipeline_t rx_pipe[RX_PIPE_COUNT];
+#if RX_PIPE_COUNT > 2
+#error "add rx_axiq_configs[] and rx_adc[] initializers for the extra pipes"
+#endif
+// Set on channel select. Defaults match receiver_init(): pipe N streams VSPA_RX0 + N
+axiq_config_t rx_axiq_configs[RX_PIPE_COUNT] = {
+    AXIQ_CONFIG_RX(RX0_AXI_FIFO_ADDR, RX0_ADC_RD_DMA_CHANNEL, PHY_TIMER_COMP_CH3_RX_ALLOWED, AXIQ_FIFO_RX2),
+#if RX_PIPE_COUNT > 1
+    AXIQ_CONFIG_RX(RX1_AXI_FIFO_ADDR, RX1_ADC_RD_DMA_CHANNEL, PHY_TIMER_COMP_CH4_RX_ALLOWED, AXIQ_FIFO_RX3),
+#endif
+};
+adc_pipeline_t rx_adc[RX_PIPE_COUNT] = {
+    { .afe.base_buffer = adc_buffer[0], .afe.config = &rx_axiq_configs[0] },
+#if RX_PIPE_COUNT > 1
+    { .afe.base_buffer = adc_buffer[1], .afe.config = &rx_axiq_configs[1] },
+#endif
+};
 
-// Converts ADC sample time (phytime ticks since stream origin) into user facing timestamp (samples count after decimation)
-static inline uint64_t phyticks_to_ts(uint64_t phyticks, uint16_t decimate_pow2, uint16_t dcs_clock_divider_disabled) {
-    return (phyticks << dcs_clock_divider_disabled) >> decimate_pow2;
+// Written by host through the features map (VSPA_CHANNEL_RX_CONFIG_ARRAY)
+vspa_channel_config_t rx_channel_cfg[RX_CHANNEL_COUNT];
+
+static inline const vspa_channel_config_t *rx_pipe_cfg(uint16_t pipe) { return &rx_channel_cfg[rx_adc[pipe].channel]; }
+static inline uint16_t rx_pipe_exponent(uint16_t pipe) { return rx_pipe_cfg(pipe)->oversample_exponent; }
+
+// Converts ADC sample time (phytime ticks since stream origin) into user facing timestamp (samples count after decimation).
+// With the ADC clock divider disabled, one PHY timer tick is two ADC samples.
+static inline uint64_t phyticks_to_ts(uint64_t phyticks, uint16_t oversample_exponent, uint16_t clock_divider_disabled) {
+    return (phyticks << clock_divider_disabled) >> oversample_exponent;
 }
 
-static inline void rx_wip_tcd_load(rx_ddr_pipeline_t *rx) {
-    rx->ddr.wip_tcd = *tcd_fifo_front(&rx->ddr.dma.tcd_table);
-    rx->wip_tcd_output = tcd_fifo_back(&rx->output_blocks);
+static inline void rx_wip_tcd_load(uint16_t pipe) {
+    rx_pipeline_t *const rx = &rx_pipe[pipe];
+    rx_wip_tcd[pipe] = *tcd_fifo_front(&rx_hdma[pipe].tcd_table);
+    rx->wip_tcd_output = tcd_fifo_back(&rx_output_blocks[pipe]);
     dma_tcd_reset(rx->wip_tcd_output);
 }
 
 // Completes TCD that is currently being filled. Status is published to host once the last
 // data transfer into the TCD buffer completes.
-static void rx_wip_tcd_finish(rx_ddr_pipeline_t *rx, uint32_t extra_flags) {
+static void rx_wip_tcd_finish(uint16_t pipe, uint32_t extra_flags) {
     // timestamp and size are filled in while the data transfers are enqueued
-    ddr_pipeline_t *const ddr = &rx->ddr;
-    rx->wip_tcd_output->flags |= extra_flags;
-    tcd_fifo_push(&rx->output_blocks); // mark output as ready
+    rx_pipe[pipe].wip_tcd_output->flags |= extra_flags;
+    tcd_fifo_push(&rx_output_blocks[pipe]); // mark output as ready
 
     // recirculate TCD to the back of the queue, host buffers are reused continuously
-    *(tcd_fifo_back(&ddr->dma.tcd_table)) = *tcd_fifo_front(&ddr->dma.tcd_table);
-    tcd_fifo_pop(&ddr->dma.tcd_table);
-    tcd_fifo_push(&ddr->dma.tcd_table);
-    rx_wip_tcd_load(rx);
+    *(tcd_fifo_back(&rx_hdma[pipe].tcd_table)) = *tcd_fifo_front(&rx_hdma[pipe].tcd_table);
+    tcd_fifo_pop(&rx_hdma[pipe].tcd_table);
+    tcd_fifo_push(&rx_hdma[pipe].tcd_table);
+    rx_wip_tcd_load(pipe);
 
     // Mark input TCD as completed
-    ++ddr->dma.tcd_table.done;
+    ++rx_hdma[pipe].tcd_table.done;
     ++proxy.rx_dma_done;
     proxy_dirty = true;
-    vspa_to_host_signal(ddr->dma.vth_tcd_done_flag_mask);
+    vspa_to_host_signal(rx_hdma[pipe].vth_tcd_done_flag_mask);
 }
 
 // Samples following the ones already written are lost. TCD buffer must contain only contiguous samples,
 // so partially filled TCD is completed early.
-static void rx_wip_tcd_discontinuity(rx_ddr_pipeline_t *rx) {
-    if (tcd_is_valid(&rx->ddr.wip_tcd))
-        rx_wip_tcd_finish(rx, IQSTREAM_TRUNCATED);
+static void rx_wip_tcd_discontinuity(uint16_t pipe) {
+    if (tcd_is_valid(&rx_wip_tcd[pipe]))
+        rx_wip_tcd_finish(pipe, IQSTREAM_TRUNCATED);
 }
 
-static inline void rx_adc_pipe_reset(adc_pipeline_t *adc, cfixed16_t *buffer) {
-    afe_pipe_reset(&adc->afe, buffer);
+static inline void rx_adc_pipe_reset(adc_pipeline_t *adc) {
+    afe_pipe_reset(&adc->afe);
     adc->phyticks = 0;
     adc->sampling = false;
 }
 
-static inline void rx_ddr_pipe_reset(rx_ddr_pipeline_t *rx, cfixed16_t *buffer) {
-    ddr_pipeline_t *const ddr = &rx->ddr;
+static inline void rx_ddr_pipe_reset(uint16_t pipe, cfixed16_t *buffer) {
+    ddr_pipeline_t *const ddr = &rx_ddr[pipe];
     ddr_pipe_reset(ddr, buffer);
-    rx->buf_timestamp = 0;
+    rx_pipe[pipe].buf_timestamp = 0;
 
-    ddr->wip_tcd.size = 0;
-    ddr->wip_tcd.flags = 0;
+    rx_wip_tcd[pipe].size = 0;
+    rx_wip_tcd[pipe].flags = 0;
 
-    tcd_fifo_reset(&ddr->dma.tcd_table);
-    tcd_fifo_reset(&rx->output_blocks);
-    rx->wip_tcd_output = tcd_fifo_back(&rx->output_blocks);
-    dma_tcd_reset(rx->wip_tcd_output);
+    tcd_fifo_reset(&rx_hdma[pipe].tcd_table);
+    tcd_fifo_reset(&rx_output_blocks[pipe]);
+    rx_pipe[pipe].wip_tcd_output = tcd_fifo_back(&rx_output_blocks[pipe]);
+    dma_tcd_reset(rx_pipe[pipe].wip_tcd_output);
     // memset16(ddr->meta, 0, sizeof(ddr->meta));
 
     const uint32_t dma_mask = (1 << ddr->dma_channel);
@@ -123,100 +144,84 @@ static inline void rx_ddr_pipe_reset(rx_ddr_pipeline_t *rx, cfixed16_t *buffer) 
     dma_clear_all_bits(dma_mask);
 }
 
-int rx_select_channel(uint16_t lane, e_rx_channel channel) {
-    if (lane >= RX_MAX_LANE_COUNT || channel > VSPA_RX1)
+int rx_select_channel(uint16_t pipe, e_rx_channel channel) {
+    if (pipe >= RX_PIPE_COUNT || channel > VSPA_RX1)
         return lime_Result_InvalidValue;
-    adc_pipeline_t *const adc = &rx_adc[lane];
+    adc_pipeline_t *const adc = &rx_adc[pipe];
     adc->channel = channel;
 
-    afe_pipeline_t *const afe = &rx_adc[lane].afe;
-    rx_axiq_fill_config(&afe->config, channel);
+    rx_axiq_fill_config(&rx_axiq_configs[pipe], channel);
+    rx_adc_pipe_reset(&rx_adc[pipe]);
 
-    rx_adc_pipe_reset(&rx_adc[lane], adc_buffer[lane]);
+    ddr_pipeline_t *const ddr = &rx_ddr[pipe];
+    ddr->dma_channel = DDR_WR_DMA_CHANNEL_1 + pipe;
+    rx_ddr_pipe_reset(pipe, ddr_write_buffer[pipe]);
 
-    ddr_pipeline_t *const ddr = &rx_ddr[lane].ddr;
-    ddr->dma_channel = DDR_WR_DMA_CHANNEL_1 + lane;
-    dec_pipe[lane].decimate_exponent = rx_channel_cfg[channel].decimate_pow2;
-    rx_ddr_pipe_reset(&rx_ddr[lane], ddr_write_buffer[lane]);
+    vspa_dma_hif_t *const hdma = &rx_hdma[pipe];
 
-    ddr->dma.htv_tcd_pending_flag_mask = (HTV_SIGNAL_RXLANE0_TCD_PENDING << lane);
-    ddr->dma.vth_tcd_done_flag_mask = (VTH_SIGNAL_RXLANE0_TCD_DONE << lane);
+    hdma->htv_tcd_pending_flag_mask = (HTV_SIGNAL_RXLANE0_TCD_PENDING << pipe);
+    hdma->vth_tcd_done_flag_mask = (VTH_SIGNAL_RXLANE0_TCD_DONE << pipe);
 
-    clear_htv_signal(ddr->dma.htv_tcd_pending_flag_mask);
+    clear_htv_signal(hdma->htv_tcd_pending_flag_mask);
     return lime_Result_Success;
 }
 
-// Takes effect when a lane selects the channel or is primed for streaming
-int rx_set_oversampling(e_rx_channel channel, uint16_t decimate_pow2) {
-    if (channel >= RX_CHANNEL_COUNT || decimate_pow2 > MAX_DECIMATION_EXPONENT)
-        return lime_Result_InvalidValue;
-
-    rx_channel_cfg[channel].decimate_pow2 = decimate_pow2;
-    return lime_Result_Success;
-}
-
-int rx_set_sample_format(uint16_t lane, iq_sample_format_e format) {
-    if (lane >= RX_MAX_LANE_COUNT)
+int rx_set_sample_format(uint16_t pipe, iq_sample_format_e format) {
+    if (pipe >= RX_PIPE_COUNT)
         return lime_Result_InvalidValue;
     if (format == IQ_SAMPLE_FORMAT_I12)
-        downscalefactor[lane] = 0.0625f;
+        downscalefactor[pipe] = 0.0625f;
     else
-        downscalefactor[lane] = 1.0f;
+        downscalefactor[pipe] = 1.0f;
     return lime_Result_Success;
-}
-
-int rx_get_oversampling(e_rx_channel channel) {
-    if (channel >= RX_CHANNEL_COUNT)
-        return lime_Result_InvalidValue;
-    return rx_channel_cfg[channel].decimate_pow2;
 }
 
 // Prime ADC AXIQ and DMA engine, the actual start is triggered by phytimer
 static inline void initial_adc_enq(afe_pipeline_t *afe) {
-    const uint16_t dma_mask = 1 << afe_dma_channel(afe);
+    const axiq_config_t *const axiq = afe->config;
 
-    afe_axiq_fifo_enable(afe->config.axi_fifo_index);
+    axiq_pipe_enable(axiq);
     // Enabling Rx AXIQ instantly generates underrun error, clear it.
-    afe_axiq_fifo_clear_err(afe->config.axi_fifo_index);
+    axiq_pipe_clear_err(axiq);
 
     // enque two reads
-    const uint32_t dma_ctrl = afe->config.dmac_ctrl_flags | DMAC_TRIG_VCPU | DMAC_PEND_EXT;
-    dmac_prep_a_s(ADC_XFER_SIZE_BYTES, afe->config.axi_fifo_addr);
+    const uint32_t dma_ctrl = axiq->dmac_ctrl_flags | DMAC_TRIG_VCPU | DMAC_PEND_EXT;
+    dmac_prep_a_s(ADC_XFER_SIZE_BYTES, axiq->axi_fifo_addr);
     dmac_enable_v_c(dma_ctrl, VCPU_ADDR_FOR_DMA(afe->base_buffer));
     TRACE_DMA_BEGIN(afe_dma_channel(afe), afe->count_dmac_enque & 1);
-    // ++rx_stats[lane].afe_enq;
+    // ++rx_stats[pipe].afe_enq;
     ++afe->count_dmac_enque;
     dmac_enable_v_c(dma_ctrl, VCPU_ADDR_FOR_DMA(&afe->base_buffer[AXIQ_XFER_SAMPLES_COUNT]));
-    // TRACE_DMA_BEGIN(afe->config.dma_channel, rx_stats[lane].afe_enq & 1);
-    // ++rx_stats[lane].afe_enq;
+    // TRACE_DMA_BEGIN(axiq->dma_channel, rx_stats[pipe].afe_enq & 1);
+    // ++rx_stats[pipe].afe_enq;
     ++afe->count_dmac_enque;
 }
 
 // @param timestamp of the first sample in the buffer
-static void rx_lane_try_ddr_enqueue(uint16_t lane, const cfixed16_t *buffer, uint64_t timestamp) {
+static void rx_lane_try_ddr_enqueue(uint16_t pipe, const cfixed16_t *buffer, uint64_t timestamp) {
     TRACE_START_DURATION(t1);
-    rx_ddr_pipeline_t *const rx = &rx_ddr[lane];
-    ddr_pipeline_t *const ddr = &rx_ddr[lane].ddr;
+    rx_pipeline_t *const rx = &rx_pipe[pipe];
+    ddr_pipeline_t *const ddr = &rx_ddr[pipe];
     if (!dmac_is_available(1 << ddr->dma_channel)) {
         // should not happen. DDR transfers should complete faster than ADC acquisition.
         // IF ddr is not available, then realtime work is not possible.
-        ++rx_stats[lane].dfe_ovr;
+        ++rx_stats[pipe].dfe_ovr;
         ++proxy.rx_ovr;
         proxy_dirty = true;
-        rx_wip_tcd_discontinuity(rx);
+        rx_wip_tcd_discontinuity(pipe);
         return;
     }
 
-    if (!tcd_is_valid(&ddr->wip_tcd)) {
-        if (tcd_fifo_isempty(&ddr->dma.tcd_table)) {
-            ++rx_stats[lane].dfe_udr;
-            rx_wip_tcd_discontinuity(rx);
+    if (!tcd_is_valid(&rx_wip_tcd[pipe])) {
+        if (tcd_fifo_isempty(&rx_hdma[pipe].tcd_table)) {
+            ++rx_stats[pipe].dfe_udr;
+            rx_wip_tcd_discontinuity(pipe);
             return;
         }
-        rx_wip_tcd_load(rx);
+        rx_wip_tcd_load(pipe);
     }
 
-    volatile dma_tcd_t *const tcd = &ddr->wip_tcd;
+    volatile dma_tcd_t *const tcd = &rx_wip_tcd[pipe];
     const uint32_t xfer_size = tcd->size > DDR_XFER_SIZE_BYTES ? DDR_XFER_SIZE_BYTES : tcd->size;
 
     iowr(DMA_DMEM_PRAM_ADDR, VCPU_ADDR_FOR_DMA(buffer));
@@ -243,7 +248,7 @@ static void rx_lane_try_ddr_enqueue(uint16_t lane, const cfixed16_t *buffer, uin
     iowr(DMA_XFR_CTRL, dma_ctrl);
     TRACE_DMA_BEGIN(ddr->dma_channel, ddr->count_dmac_enque & 1);
     ++ddr->count_dmac_enque;
-    rx_stats[lane].dfe_enq = ddr->count_dmac_enque;
+    rx_stats[pipe].dfe_enq = ddr->count_dmac_enque;
 
     if (tcd->size == 0) {
         ddr_meta->flags |= IQSTREAM_DMA_TCD_END;
@@ -254,40 +259,40 @@ static void rx_lane_try_ddr_enqueue(uint16_t lane, const cfixed16_t *buffer, uin
 
 // Restarts sampling at a known phytime to reestablish samples timing. Samples that are still in the
 // ADC path are dropped, already sent to DDR remain valid, as they were all received before the overrun.
-static void rx_resync(uint16_t lane) {
+static void rx_resync(uint16_t pipe) {
     TRACE_START_DURATION(t1);
-    adc_pipeline_t *const adc = &rx_adc[lane];
-    afe_pipeline_t *const afe = &rx_adc[lane].afe;
-    rx_ddr_pipeline_t *const ddr = &rx_ddr[lane];
-    decimation_pipeline_t *const dec = &dec_pipe[lane];
+    adc_pipeline_t *const adc = &rx_adc[pipe];
+    afe_pipeline_t *const afe = &rx_adc[pipe].afe;
+    const axiq_config_t *const axiq = afe->config;
+    decimation_pipeline_t *const dec = &dec_pipe[pipe];
 
     // partially accumulated DDR block is dropped, filter history is not contiguous with restarted samples
-    decimation_clear(&dec_pipe[lane]);
-    rx_wip_tcd_discontinuity(ddr);
+    decimation_clear(&dec_pipe[pipe]);
+    rx_wip_tcd_discontinuity(pipe);
 
     // keep restarted samples on the decimated samples grid
-    const uint32_t align_mask = (1 << dec->decimate_exponent) - 1;
+    const uint32_t align_mask = (1 << rx_pipe_exponent(pipe)) - 1;
     // ADC sample time of the restart, if no samples would have been lost
     const uint32_t expected_phytime = stream_origin_phyticks + (uint32_t)adc->phyticks;
 
     uint32_t start_phytime;
     uint32_t lead = RX_RESYNC_LEAD_TICKS;
     for (uint16_t attempt = 0;; ++attempt, lead <<= 1) {
-        afe_axiq_fifo_reset(afe);
-        rx_adc_pipe_reset(adc, adc_buffer[lane]);
+        axiq_pipe_reset(afe);
+        rx_adc_pipe_reset(adc);
         initial_adc_enq(afe);
 
         if (attempt == RX_RESYNC_MAX_ATTEMPTS) {
             // Could not schedule in time, start immediately and estimate the time
             const uint32_t before_phytime = phytime_now();
-            timer_trig_immediate_async(afe->config.phytimer_id, ePhyTimerComparatorOut1);
+            timer_trig_immediate_async(axiq->phytimer_id, ePhyTimerComparatorOut1);
             start_phytime = before_phytime + ((phytime_now() - before_phytime) >> 1);
             break;
         }
 
         const uint32_t start_offset = ((phytime_now() + lead - stream_origin_phyticks) + align_mask) & ~align_mask;
         start_phytime = stream_origin_phyticks + start_offset;
-        timer_trig_schedule_async(afe->config.phytimer_id, ePhyTimerComparatorOut1, start_phytime);
+        timer_trig_schedule_async(axiq->phytimer_id, ePhyTimerComparatorOut1, start_phytime);
         timer_wait_done();
         // Comparator triggers only on equality, if start time has already passed it might have been missed.
         if ((int32_t)(phytime_now() - start_phytime) < 0)
@@ -296,13 +301,13 @@ static void rx_resync(uint16_t lane) {
 
     adc->phyticks += (int32_t)(start_phytime - expected_phytime);
     adc->sampling = true;
-    ++rx_stats[lane].afe_drop;
+    ++rx_stats[pipe].afe_drop;
     TRACE_DURATION(T_ADC_AXIQ_RST, DEFAULT_THREAD_ID, t1);
 }
 
-void adc_dma_complete(uint16_t lane) {
-    adc_pipeline_t *const adc = &rx_adc[lane];
-    afe_pipeline_t *const afe = &rx_adc[lane].afe;
+void adc_dma_complete(uint16_t pipe) {
+    adc_pipeline_t *const adc = &rx_adc[pipe];
+    afe_pipeline_t *const afe = &rx_adc[pipe].afe;
 
     TRACE_START_DURATION(t1);
     TRACE_DMA_END(afe_dma_channel(afe), afe->count_dmac_complete & 1);
@@ -313,33 +318,38 @@ void adc_dma_complete(uint16_t lane) {
 
     if (axiq_fifo_errors(afe)) {
         // Unknown amount of samples were lost, completed buffer might already contain the gap.
-        rx_resync(lane);
+        rx_resync(pipe);
         TRACE_DURATION(T_ADC_COMPLETE, DEFAULT_THREAD_ID, t1);
         return;
     }
 
     cfixed16_t *const completed_buffer = afe_next_complete_buffer(afe);
     ++afe->count_dmac_complete;
-    ++rx_stats[lane].afe_compl;
+    ++rx_stats[pipe].afe_compl;
+
+    // read once, the host may write the config at any time
+    const vspa_channel_config_t *const cfg = rx_pipe_cfg(pipe);
+    const uint16_t exponent = cfg->oversample_exponent;
+    const uint16_t clock_divider_disabled = cfg->clock_divider_disabled;
 
     const uint64_t buffer_time = adc->phyticks;
-    adc->phyticks += (AXIQ_XFER_SAMPLES_COUNT >> adc_clock_divider_disabled[lane]);
+    adc->phyticks += (AXIQ_XFER_SAMPLES_COUNT >> clock_divider_disabled);
 
     // work
-    rx_ddr_pipeline_t *const rx = &rx_ddr[lane];
-    ddr_pipeline_t *const ddr = &rx_ddr[lane].ddr;
-    decimation_pipeline_t *const dec = &dec_pipe[lane];
+    rx_pipeline_t *const rx = &rx_pipe[pipe];
+    ddr_pipeline_t *const ddr = &rx_ddr[pipe];
+    decimation_pipeline_t *const dec = &dec_pipe[pipe];
     cfixed16_t *const dest = ddr_next_enq_buffer(ddr);
     TRACE_START_DURATION(t2);
     if (dec->samples_produced == 0) {
-        rx->buf_timestamp = phyticks_to_ts(buffer_time, dec_pipe[lane].decimate_exponent, adc_clock_divider_disabled[lane]);
+        rx->buf_timestamp = phyticks_to_ts(buffer_time, exponent, clock_divider_disabled);
     }
-    rx_qec_correction(completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
+    rx_qec_correction(rx_adc[pipe].channel, completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
 
     cfixed16_t *buffer_to_scale;
-    if (dec->decimate_exponent) {
+    if (exponent) {
         // in place processing
-        decimate_work(dec, dest + dec->samples_produced, completed_buffer, ADC_XFER_SAMPLE_COUNT);
+        decimate_work(dec, exponent, dest + dec->samples_produced, completed_buffer, ADC_XFER_SAMPLE_COUNT);
         buffer_to_scale = dest;
     } else {
         dec->samples_produced = DDR_XFER_SAMPLE_COUNT;
@@ -347,40 +357,40 @@ void adc_dma_complete(uint16_t lane) {
     }
     TRACE_DURATION(T_RX_WORK, DEFAULT_THREAD_ID, t2);
     if (dec->samples_produced >= DDR_XFER_SAMPLE_COUNT) {
-        rhf_rhf_rsp_vMultiSclr_asm(dest, buffer_to_scale, &downscalefactor[lane], DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
+        rhf_rhf_rsp_vMultiSclr_asm(dest, buffer_to_scale, &downscalefactor[pipe], DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
         if (dmac_is_complete(1 << ddr->dma_channel))
-            rx_ddr_dma_complete(lane);
-        rx_lane_try_ddr_enqueue(lane, dest, rx->buf_timestamp);
+            rx_ddr_dma_complete(pipe);
+        rx_lane_try_ddr_enqueue(pipe, dest, rx->buf_timestamp);
         decimate_output_consume(dec);
     }
 
     // ADC self perpetuating, reenque new tranfer on each completion
-    dmac_enable(afe->config.dmac_ctrl_flags | DMAC_TRIG_VCPU | DMAC_PEND_EXT, // flags
+    const axiq_config_t *const axiq = afe->config;
+    dmac_enable(axiq->dmac_ctrl_flags | DMAC_TRIG_VCPU | DMAC_PEND_EXT, // flags
                 ADC_XFER_SIZE_BYTES, // size
-                afe->config.axi_fifo_addr, // axi addr
+                axiq->axi_fifo_addr, // axi addr
                 VCPU_ADDR_FOR_DMA(completed_buffer) // dmem addr
     );
     TRACE_DMA_BEGIN(afe_dma_channel(afe), afe->count_dmac_enque & 1);
-    ++rx_stats[lane].afe_enq;
+    ++rx_stats[pipe].afe_enq;
     ++afe->count_dmac_enque;
     TRACE_DURATION(T_ADC_COMPLETE, DEFAULT_THREAD_ID, t1);
 }
 
-void rx_ddr_dma_complete(uint16_t lane) {
+void rx_ddr_dma_complete(uint16_t pipe) {
     TRACE_START_DURATION(t1);
-    rx_ddr_pipeline_t *const rx = &rx_ddr[lane];
-    ddr_pipeline_t *const ddr = &rx_ddr[lane].ddr;
+    ddr_pipeline_t *const ddr = &rx_ddr[pipe];
     TRACE_DMA_END(ddr->dma_channel, ddr->count_dmac_complete & 1);
     const meta_t *const meta = ddr_next_complete_meta(ddr);
 
     ++ddr->count_dmac_complete;
-    ++rx_stats[lane].dfe_compl;
+    ++rx_stats[pipe].dfe_compl;
 
     dmac_clear_complete(1 << ddr->dma_channel);
     dmac_clear_event(1 << ddr->dma_channel);
 
     if (meta->flags & IQSTREAM_DMA_TCD_END) {
-        rx_wip_tcd_finish(rx, 0);
+        rx_wip_tcd_finish(pipe, 0);
         // rx_publish_tcd_status(ddr, &meta->status);
     }
 
@@ -388,35 +398,32 @@ void rx_ddr_dma_complete(uint16_t lane) {
 }
 
 void receiver_init(void) {
-    for (uint16_t ch = 0; ch < RX_CHANNEL_COUNT; ++ch)
-        rx_set_oversampling((e_rx_channel)ch, 0);
-    for (uint16_t i = 0; i < RX_MAX_LANE_COUNT; ++i) {
+    for (uint16_t i = 0; i < RX_PIPE_COUNT; ++i) {
         rx_select_channel(i, (e_rx_channel)(VSPA_RX0 + i));
         rx_set_sample_format(i, IQ_SAMPLE_FORMAT_I16);
     }
 }
 
-void rx_lane_prime(uint16_t lane) {
-    adc_pipeline_t *const adc = &rx_adc[lane];
-    afe_pipeline_t *const afe = &rx_adc[lane].afe;
-    timer_trig_immediate_async(afe->config.phytimer_id, ePhyTimerComparatorOut0);
+void rx_lane_prime(uint16_t pipe) {
+    adc_pipeline_t *const adc = &rx_adc[pipe];
+    const axiq_config_t *const axiq = rx_adc[pipe].afe.config;
+    timer_trig_immediate_async(axiq->phytimer_id, ePhyTimerComparatorOut0);
 
-    dec_pipe[lane].decimate_exponent = rx_channel_cfg[adc->channel].decimate_pow2;
-    rx_adc_pipe_reset(&rx_adc[lane], adc_buffer[lane]);
-    rx_ddr_pipe_reset(&rx_ddr[lane], ddr_write_buffer[lane]);
-    memset16(&rx_stats[lane], 0, sizeof(struct PipeStats));
-    decimation_clear(&dec_pipe[lane]);
+    rx_adc_pipe_reset(adc);
+    rx_ddr_pipe_reset(pipe, ddr_write_buffer[pipe]);
+    memset16(&rx_stats[pipe], 0, sizeof(struct PipeStats));
+    decimation_clear(&dec_pipe[pipe]);
 }
 
 // Stream start raises all Rx lanes rx_allowed at stream_origin_phyticks
 void rx_stream_started(void) {
-    for (int lane = 0; lane < RX_MAX_LANE_COUNT; ++lane)
-        rx_adc[lane].sampling = true;
+    for (int pipe = 0; pipe < RX_PIPE_COUNT; ++pipe)
+        rx_adc[pipe].sampling = true;
 }
 
-void rx_lane_stop(uint16_t lane) {
-    afe_pipe_abort(&rx_adc[lane].afe);
-    rx_adc[lane].sampling = false;
+void rx_lane_stop(uint16_t pipe) {
+    afe_pipe_abort(&rx_adc[pipe].afe);
+    rx_adc[pipe].sampling = false;
 }
 
 extern void ProcessTxDMA(void);
@@ -426,24 +433,25 @@ static nco_correlator_t hann_terms[NCO_HANN_TERMS];
 cfloat32_t hann_sum;
 
 cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
-    uint16_t lane = 0;
+    uint16_t pipe = 0;
     tx_tone_flush(0); // don't measure samples generated before the latest Tx QEC/tone change
-    rx_select_channel(lane, channel);
+    rx_select_channel(pipe, channel);
 
     ProcessTxDMA(); // for Tx tone generation
-    rx_lane_prime(lane);
+    rx_lane_prime(pipe);
     ProcessTxDMA(); // for Tx tone generation
-    initial_adc_enq(&rx_adc[lane].afe);
-    timer_trig_immediate_async(3, ePhyTimerComparatorOut1);
-    afe_pipeline_t *const afe = &rx_adc[lane].afe;
+    afe_pipeline_t *const afe = &rx_adc[pipe].afe;
+    const axiq_config_t *const axiq = afe->config;
+    initial_adc_enq(afe);
+    timer_trig_immediate_async(axiq->phytimer_id, ePhyTimerComparatorOut1); // rx_allowed of the measured channel
 
     const uint16_t fft_size = ADC_XFER_SAMPLE_COUNT;
-    const uint16_t dma_mask = (1 << rx_adc[lane].afe.config.dma_channel);
+    const uint16_t dma_mask = (1 << axiq->dma_channel);
 
     ProcessTxDMA(); // for Tx tone generation
     const uint16_t samples_per_loop = ADC_XFER_SAMPLE_COUNT;
 
-    fcw >>= rx_channel_cfg[VSPA_RX0].decimate_pow2; // adjust for host side expected sample rate
+    fcw >>= rx_channel_cfg[channel].oversample_exponent; // adjust for host side expected sample rate
     const uint32_t hann_bin_fcw = (0x80000000u / (fft_size >> 1)); // frequency offset of 1 DFT bin
     memset16(hann_terms, 0, sizeof(hann_terms));
 
@@ -462,19 +470,20 @@ cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
         ++afe->count_dmac_complete;
 
         // work
-        rx_qec_correction(completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
+        rx_qec_correction(rx_adc[pipe].channel, completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
         nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw, &hann_terms[0]);
         nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw - hann_bin_fcw, &hann_terms[1]);
         nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw + hann_bin_fcw, &hann_terms[2]);
 
-        dmac_enable(afe->config.dmac_ctrl_flags | DMAC_PEND_EXT, // flags
+        const axiq_config_t *const axiq = afe->config;
+        dmac_enable(axiq->dmac_ctrl_flags | DMAC_PEND_EXT, // flags
                     ADC_XFER_SIZE_BYTES, // size
-                    afe->config.axi_fifo_addr, // axi addr
+                    axiq->axi_fifo_addr, // axi addr
                     VCPU_ADDR_FOR_DMA(completed_buffer) // dmem addr
         );
         ++afe->count_dmac_enque;
     }
-    rx_lane_stop(lane);
+    rx_lane_stop(pipe);
 
     nco_hann_combine(hann_terms, &hann_sum);
 
@@ -482,19 +491,18 @@ cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
 }
 
 // On first TCD enqueues initial DMA transfers for further self triggering
-void host_submitted_rx_tcd(uint16_t lane) {
-    ddr_pipeline_t *const ddr = &rx_ddr[lane].ddr;
-    afe_pipeline_t *const afe = &rx_adc[lane].afe;
+void host_submitted_rx_tcd(uint16_t pipe) {
+    afe_pipeline_t *const afe = &rx_adc[pipe].afe;
 
-    if (!tcd_is_valid(&ddr->wip_tcd) && !tcd_fifo_isempty(&ddr->dma.tcd_table))
-        rx_wip_tcd_load(&rx_ddr[lane]);
+    if (!tcd_is_valid(&rx_wip_tcd[pipe]) && !tcd_fifo_isempty(&rx_hdma[pipe].tcd_table))
+        rx_wip_tcd_load(pipe);
 
     if (afe_buffers_in_flight(afe) >= MAX_DMA_ENQ)
         return; // skip, all adc buffers busy
 
     // If rx_allowed is already active, FIFO would start receiving samples at unknown time.
-    if (rx_adc[lane].sampling && (int32_t)(phytime_now() - stream_origin_phyticks) >= 0)
-        rx_resync(lane);
+    if (rx_adc[pipe].sampling && (int32_t)(phytime_now() - stream_origin_phyticks) >= 0)
+        rx_resync(pipe);
     else
         initial_adc_enq(afe);
 }

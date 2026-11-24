@@ -22,19 +22,10 @@ typedef enum {
     VSPA_RX1,
 } e_rx_channel;
 
-// Persistent channel parameters, applied to the lane which streams the channel
-typedef struct RxChannelConfig {
-    uint16_t decimate_pow2;
-} rx_channel_config_t;
-
 typedef struct RxDDR_lane {
-    dma_tcd_fifo_t output_blocks;
-    dma_tcd_t *wip_tcd_output;
+    dma_tcd_t *wip_tcd_output; // back of rx_output_blocks[pipe], being filled
     uint64_t buf_timestamp; // timestamp of the first sample in the DDR transfer buffer being filled
-    ddr_pipeline_t ddr;
-    // uint16_t buf_filled;
-    // uint16_t decimate_pow2; // copy of the selected channel's config, latched on channel select and lane prime
-} rx_ddr_pipeline_t;
+} rx_pipeline_t;
 
 typedef struct ADC_lane {
     afe_pipeline_t afe;
@@ -43,15 +34,17 @@ typedef struct ADC_lane {
     bool sampling; // rx_allowed is raised, or scheduled to be raised
 } adc_pipeline_t;
 
-extern rx_ddr_pipeline_t rx_ddr[RX_MAX_LANE_COUNT];
-extern adc_pipeline_t rx_adc[RX_MAX_LANE_COUNT];
+extern axiq_config_t rx_axiq_configs[RX_PIPE_COUNT];
+extern vspa_channel_config_t rx_channel_cfg[RX_CHANNEL_COUNT];
+extern vspa_dma_hif_t rx_hdma[RX_PIPE_COUNT];
+extern dma_tcd_fifo_t rx_output_blocks[RX_PIPE_COUNT];
+
+extern ddr_pipeline_t rx_ddr[RX_PIPE_COUNT];
+extern adc_pipeline_t rx_adc[RX_PIPE_COUNT];
 
 void receiver_init(void);
 int rx_select_channel(uint16_t lane, e_rx_channel channel);
 int rx_set_sample_format(uint16_t lane, iq_sample_format_e format);
-int rx_set_oversampling(e_rx_channel channel, uint16_t decimate_pow2);
-// @return channel's decimation as power of 2, or negative lime_Result on error
-int rx_get_oversampling(e_rx_channel channel);
 
 void rx_lane_prime(uint16_t lane);
 void rx_lane_stop(uint16_t lane);

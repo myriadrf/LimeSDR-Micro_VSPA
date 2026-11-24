@@ -19,6 +19,8 @@ typedef struct TxTDD_Config {
     uint16_t pa_off_comparator_out : 2;
 } tx_tdd_config_t;
 
+// DAC DMA allowed comparator, PHY_TIMER_COMP_CH5_TX_ALLOWED by default
+void tx_tdd_set_dac_allowed_comparator(uint16_t phytimer_id);
 void tx_tdd_schedule_start(const tx_tdd_config_t *tdd, uint32_t phytime);
 void tx_tdd_schedule_end(const tx_tdd_config_t *tdd, uint32_t phytime, uint32_t rf_switch_phytime);
 

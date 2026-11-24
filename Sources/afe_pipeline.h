@@ -11,6 +11,7 @@
 #include "axiq-la9310.h"
 
 #include "phytimer.h"
+#include "vspa_memorymap.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -27,19 +28,24 @@
 // #define addr_beat_offset (0x1000 - AXIQ_FIFO_BEAT_COUNT*16)
 #define addr_beat_offset 0
 
-// Non changing data
+// AXIQ FIFO <-> DMEM transfer configuration of a pipe, set when the pipe's channel is selected
 typedef struct AXIQ_Config {
-    uint32_t axi_fifo_addr;
-    uint16_t dma_channel;
-    uint16_t phytimer_id;
-    enum axiq_fifo_e axi_fifo_index;
-    uint32_t dmac_ctrl_flags; // dma channel, direction, conversion
+    uint32_t axi_fifo_addr; // AXIQ FIFO address on the AXI bus
+    uint16_t dma_channel; // VSPA DMA channel moving the samples between the AXIQ FIFO and DMEM
+    uint16_t phytimer_id; // PHY timer comparator gating the FIFO (rx/tx allowed)
+    uint32_t axi_fifo_index; // enum axiq_fifo_e
+    uint32_t dmac_ctrl_flags; // DMA transfer control: direction, conversion, handshake, dma_channel
 } axiq_config_t;
+
+#define AXIQ_CONFIG_RX(fifo_addr, dma_ch, timer, fifo) \
+    { fifo_addr, dma_ch, timer, fifo, DMAC_FIFO_HS | DMAC_RDC | (dma_ch) }
+#define AXIQ_CONFIG_TX(fifo_addr, dma_ch, timer, fifo) \
+    { fifo_addr, dma_ch, timer, fifo, DMAC_FIFO_HS | DMAC_WRC | (dma_ch) }
 
 // Analog front end state for moving data between DMEM and ADC/DAC AXIQ
 typedef struct AFE_pipeline {
-    cfixed16_t *base_buffer;
-    axiq_config_t config;
+    cfixed16_t *const base_buffer;
+    const axiq_config_t *const config; // the pipe's entry of rx/tx_axiq_configs[]
     uint32_t count_dmac_enque;
     uint32_t count_dmac_complete;
     union {
@@ -51,32 +57,26 @@ typedef struct AFE_pipeline {
     uint16_t udr;
 } afe_pipeline_t;
 
+// AXIQ configuration of an Rx channel (e_rx_channel): RO0, RO1, RX0, RX1 have consecutive FIFOs, ADC DMA channels and
+// rx_allowed PHY timer comparators.
 static inline void rx_axiq_fill_config(axiq_config_t *cfg, uint16_t channel) {
-    cfg->axi_fifo_addr = RO0_AXI_FIFO_ADDR + (channel * 0x1000); // + addr_beat_offset;
-    cfg->axi_fifo_index = (enum axiq_fifo_e)(AXIQ_FIFO_RX0 + channel);
+    cfg->axi_fifo_addr = RO0_AXI_FIFO_ADDR + channel * 0x1000;
     cfg->dma_channel = RO0_ADC_RD_DMA_CHANNEL + channel;
     cfg->phytimer_id = PHY_TIMER_COMP_CH1_RX_ALLOWED + channel;
-    cfg->dmac_ctrl_flags = DMAC_FIFO_HS | DMAC_RDC | RO0_ADC_RD_DMA_CHANNEL + channel;
+    cfg->axi_fifo_index = AXIQ_FIFO_RX0 + channel;
+    cfg->dmac_ctrl_flags = DMAC_FIFO_HS | DMAC_RDC | (RO0_ADC_RD_DMA_CHANNEL + channel);
 }
 
-static inline void tx_axiq_fill_config(axiq_config_t *cfg, uint16_t channel) {
-    cfg->axi_fifo_addr = TX0_AXI_FIFO_ADDR; // + addr_beat_offset;
-    cfg->axi_fifo_index = AXIQ_FIFO_TX0;
-    cfg->dma_channel = TX_DAC_WR_DMA_CHANNEL;
-    cfg->phytimer_id = PHY_TIMER_COMP_CH5_TX_ALLOWED;
-    cfg->dmac_ctrl_flags = DMAC_FIFO_HS | DMAC_WRC | TX_DAC_WR_DMA_CHANNEL;
-}
+static inline uint16_t afe_dma_channel(const afe_pipeline_t *pipe) { return pipe->config->dma_channel; }
 
-static inline uint16_t afe_dma_channel(const afe_pipeline_t *pipe) { return pipe->config.dma_channel; }
-
-void afe_axiq_fifo_enable(enum axiq_fifo_e fifo);
-void afe_axiq_fifo_clear_err(enum axiq_fifo_e fifo);
-void afe_axiq_fifo_reset(afe_pipeline_t *pipe);
+void axiq_pipe_enable(const axiq_config_t *axiq);
+void axiq_pipe_clear_err(const axiq_config_t *axiq);
+void axiq_pipe_reset(afe_pipeline_t *pipe);
 
 // @return true if AXIQ FIFO has overrun, and samples were lost
 uint32_t axiq_fifo_errors(afe_pipeline_t *pipe);
 
-void afe_pipe_reset(afe_pipeline_t *pipe, cfixed16_t *buffer);
+void afe_pipe_reset(afe_pipeline_t *pipe);
 void afe_pipe_abort(afe_pipeline_t *pipe);
 
 static inline uint32_t phytime_now(void) { return gpird(4); }

@@ -19,7 +19,6 @@ typedef struct MetaData {
 } meta_t;
 
 typedef struct DDR_pipeline {
-    vspa_dma_hif_t dma;
     cfixed16_t *base_buffer;
     uint32_t count_dmac_enque;
     uint32_t count_dmac_complete;
@@ -30,7 +29,6 @@ typedef struct DDR_pipeline {
     };
     uint16_t dma_channel;
     meta_t meta[2];
-    dma_tcd_t wip_tcd; // working copy of input tcd, so the original could be recirculated.
 } ddr_pipeline_t;
 
 static void ddr_pipe_reset(ddr_pipeline_t *ddr, cfixed16_t *buffer) {

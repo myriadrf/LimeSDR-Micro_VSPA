@@ -4,11 +4,11 @@
 #include <stdint.h>
 
 #define RX_CHANNEL_COUNT 4
-#define RX_MAX_LANE_COUNT 1
+#define RX_PIPE_COUNT 1
 #define MAX_DECIMATION_EXPONENT 7
 
 #define TX_CHANNEL_COUNT 1
-#define TX_MAX_LANE_COUNT 1
+#define TX_PIPE_COUNT 1
 #define MAX_INTERPOLATION_EXPONENT 7
 
 #define SAMPLES_IN_DMEM_LINE 32

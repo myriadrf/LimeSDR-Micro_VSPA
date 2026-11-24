@@ -11,71 +11,33 @@
 #include <stdint.h>
 #include "txiqcomp.h"
 
-typedef enum {
-    MBOX_EMPTY = 0,      // 0x0
-    MBOX_IQ_CORR_FTAP0,  // 0x1
-    MBOX_IQ_CORR_FTAP1,  // 0x2
-    MBOX_IQ_CORR_FTAP2,  // 0x3
-    MBOX_IQ_CORR_FTAP3,  // 0x4
-    MBOX_IQ_CORR_FTAP4,  // 0x5
-    MBOX_IQ_CORR_FTAP5,  // 0x6
-    MBOX_IQ_CORR_FTAP6,  // 0x7
-    MBOX_IQ_CORR_FTAP7,  // 0x8
-    MBOX_IQ_CORR_FTAP8,  // 0x9
-    MBOX_IQ_CORR_FTAP9,  // 0xA
-    MBOX_IQ_CORR_FTAP10, // 0xB
-    MBOX_IQ_CORR_FTAP11, // 0xC
-    MBOX_IQ_CORR_FTAP12, // 0xD
-    MBOX_IQ_CORR_DC_I,   // 0xE
-    MBOX_IQ_CORR_DC_Q,   // 0xF
-    MBOX_IQ_CORR_FDELAY, // 0x10
-    MBOX_IQ_CORR_MAX,    // 0x11
-} mbox_iq_corr_factor_e;
+#include "fw_config.h"
+#include "vspa_memorymap.h"
 
-/**
- *  RX and TX kernel selection for QEC
- *  same kernel is used for Tx and Rx as far as no decimation is required.
- *  possible options :
- *   txiqcomp			 IQ phase and amplitude compensation
- *   txiqcomp_x32chf_5t  IQ phase and amplitude + IQ fractional delay compensation
- */
-// #define TXIQCOMP2
-// #define RXIQCOMP
-#define TXIQCOMP
-#define RXIQCOMP
+// Per channel QEC parameters, written by host through the features map (VSPA_CHANNEL_RX/TX_QEC_ARRAY)
+extern vspa_qec_params_t rx_qec_params[RX_CHANNEL_COUNT] _VSPA_VECTOR_ALIGN;
+extern vspa_qec_params_t tx_qec_params[TX_CHANNEL_COUNT] _VSPA_VECTOR_ALIGN;
 
-#ifdef TXIQCOMP2
-extern structTXIQCompParams2 iq_comp_params2_tx _VSPA_VECTOR_ALIGN;
-#else
-extern structTXIQCompParams txiqcompcfg_struct _VSPA_VECTOR_ALIGN;
-#endif
+// Sets all channels' QEC to passthrough
+void qec_init(void);
 
-#ifdef RXIQCOMP2
-extern structTXIQCompParams2 iq_comp_params2_rx _VSPA_VECTOR_ALIGN;
-#else
-extern structTXIQCompParams rxiqcompcfg_struct _VSPA_VECTOR_ALIGN;
-#endif
+// txiqcomp loads the whole DMEM line holding its config and reads the parameters at fixed offsets from the line start,
+// so the config must be DMEM line aligned. The per channel parameters share DMEM lines, so the channel's parameters are
+// copied into this line aligned work config before each call. Also gives the kernel a consistent snapshot of them.
+extern structTXIQCompParams qec_work_params _VSPA_VECTOR_ALIGN;
 
-void rf_update_iq_comp_params2(structTXIQCompParams2 *params_ptr, uint32_t rst, uint32_t idx, uint32_t val);
-void rf_update_iq_comp_params(structTXIQCompParams *params_ptr, uint32_t rst, uint32_t idx, uint32_t val);
-
-static inline void rx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint16_t dmem_lines_count) {
-#ifdef RXIQCOMP2
-    txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_rx, dmem_lines_count);
-#else
-#ifdef RXIQCOMP
-    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &rxiqcompcfg_struct, dmem_lines_count);
-#endif
-#endif
+static inline structTXIQCompParams *qec_load(const vspa_qec_params_t *params) {
+    qec_work_params = *(const structTXIQCompParams *)params;
+    return &qec_work_params;
 }
 
-static inline void tx_qec_correction(cfixed16_t *dataOut, const cfixed16_t *dataIn, uint16_t dmem_lines_count) {
-#ifdef TXIQCOMP2
-    txiqcomp_x32chf_5t((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &iq_comp_params2_tx, dmem_lines_count);
-#endif
-#ifdef TXIQCOMP
-    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, &txiqcompcfg_struct, dmem_lines_count);
-#endif
+// @param channel the channel streamed by the pipe whose samples are corrected
+static inline void rx_qec_correction(uint16_t channel, cfixed16_t *dataOut, const cfixed16_t *dataIn, uint16_t dmem_lines_count) {
+    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, qec_load(&rx_qec_params[channel]), dmem_lines_count);
+}
+
+static inline void tx_qec_correction(uint16_t channel, cfixed16_t *dataOut, const cfixed16_t *dataIn, uint16_t dmem_lines_count) {
+    txiqcomp((vspa_complex_fixed16 *)dataIn, (vspa_complex_fixed16 *)dataOut, qec_load(&tx_qec_params[channel]), dmem_lines_count);
 }
 
 #endif /* DFE_H_ */
