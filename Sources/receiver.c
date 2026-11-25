@@ -35,6 +35,19 @@
 #define RX_RESYNC_LEAD_TICKS 1024
 #define RX_RESYNC_MAX_ATTEMPTS 6
 
+#define RX_DFT_SIZE ADC_XFER_SAMPLE_COUNT // samples
+#define RX_DFT_BUFFER_COUNT (RX_DFT_SIZE / ADC_XFER_SAMPLE_COUNT)
+
+static struct {
+    uint16_t channel; // e_rx_channel
+    uint16_t buffers_left; // ADC buffers still to be correlated
+    int32_t fcw; // as requested by the host, adjusted to the ADC sample rate when acquisition starts
+} rx_dft;
+
+// Host reads the combined value of nco_hann_combine()
+static nco_correlator_t hann_terms[NCO_HANN_TERMS];
+cfloat32_t hann_sum;
+
 extern uint32_t stream_origin_phyticks;
 static float
     downscalefactor[RX_PIPE_COUNT]; // when user sample format is 12bit fullscale, downscale from ADC 16bit fullscale to 12bit
@@ -301,7 +314,56 @@ static void rx_resync(uint16_t pipe) {
     TRACE_DURATION(T_ADC_AXIQ_RST, DEFAULT_THREAD_ID, t1);
 }
 
-void adc_dma_complete(uint16_t pipe) {
+static void rx_work_to_ddr(uint16_t pipe, cfixed16_t *buffer, uint64_t buffer_time) {
+    rx_pipeline_t *const rx = &rx_pipe[pipe];
+    ddr_pipeline_t *const ddr = &rx_ddr[pipe];
+    decimation_pipeline_t *const dec = &dec_pipe[pipe];
+    cfixed16_t *const dest = ddr_next_enq_buffer(ddr);
+
+    // read once, the host may write the config at any time
+    const vspa_channel_config_t *const cfg = rx_pipe_cfg(pipe);
+    const uint16_t exponent = cfg->oversample_exponent;
+
+    if (dec->samples_produced == 0) {
+        const uint16_t clock_divider_disabled = cfg->clock_divider_disabled;
+        rx->buf_timestamp = phyticks_to_ts(buffer_time, exponent, clock_divider_disabled);
+    }
+
+    cfixed16_t *buffer_to_scale;
+    if (exponent) {
+        // in place processing
+        decimate_work(dec, exponent, dest + dec->samples_produced, buffer, ADC_XFER_SAMPLE_COUNT);
+        buffer_to_scale = dest;
+    } else {
+        dec->samples_produced = DDR_XFER_SAMPLE_COUNT;
+        buffer_to_scale = buffer;
+    }
+
+    if (dec->samples_produced >= DDR_XFER_SAMPLE_COUNT) {
+        rhf_rhf_rsp_vMultiSclr_asm(dest, buffer_to_scale, &downscalefactor[pipe], DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
+        if (dmac_is_complete(1 << ddr->dma_channel))
+            rx_ddr_dma_complete(pipe);
+        rx_lane_try_ddr_enqueue(pipe, dest, rx->buf_timestamp);
+        decimate_output_consume(dec);
+    }
+}
+
+static void rx_work_to_dft(uint16_t pipe, cfixed16_t *buffer) {
+    const int32_t fcw = rx_dft.fcw;
+    const uint32_t hann_bin_fcw = (0x80000000u / (RX_DFT_SIZE >> 1)); // frequency offset of 1 DFT bin
+    nco_correlate(buffer, ADC_DMEM_LINES_COUNT, fcw, &hann_terms[0]);
+    nco_correlate(buffer, ADC_DMEM_LINES_COUNT, fcw - hann_bin_fcw, &hann_terms[1]);
+    nco_correlate(buffer, ADC_DMEM_LINES_COUNT, fcw + hann_bin_fcw, &hann_terms[2]);
+
+    if (--rx_dft.buffers_left == 0) {
+        nco_hann_combine(hann_terms, &hann_sum);
+        rx_lane_stop(pipe);
+        // post result
+        iowr64(VCPU_OUT_0_MSB, MAKEDWORD(ADDR8(hann_sum), (uint32_t)lime_Result_Success));
+    }
+}
+
+static inline void adc_dma_complete(uint16_t pipe) {
     adc_pipeline_t *const adc = &rx_adc[pipe];
     afe_pipeline_t *const afe = &rx_adc[pipe].afe;
 
@@ -312,6 +374,21 @@ void adc_dma_complete(uint16_t pipe) {
     dmac_clear_complete(dma_mask); // don't care about complete, checking only event
     dmac_clear_event(dma_mask);
 
+    ++afe->count_dmac_complete;
+    ++rx_stats[pipe].afe_compl;
+    const vspa_channel_config_t *const cfg = rx_pipe_cfg(pipe);
+    adc->phyticks += (AXIQ_XFER_SAMPLES_COUNT >> cfg->clock_divider_disabled);
+    TRACE_DURATION(T_ADC_COMPLETE, DEFAULT_THREAD_ID, t1);
+}
+
+void rx_pipe_process(uint16_t pipe) {
+    adc_pipeline_t *const adc = &rx_adc[pipe];
+    afe_pipeline_t *const afe = &rx_adc[pipe].afe;
+
+    cfixed16_t *const completed_buffer = afe_next_complete_buffer(&adc->afe);
+    const uint64_t buffer_time = adc->phyticks;
+
+    adc_dma_complete(pipe);
     if (axiq_fifo_errors(afe)) {
         // Unknown amount of samples were lost, completed buffer might already contain the gap.
         rx_resync(pipe);
@@ -319,45 +396,16 @@ void adc_dma_complete(uint16_t pipe) {
         return;
     }
 
-    cfixed16_t *const completed_buffer = afe_next_complete_buffer(afe);
-    ++afe->count_dmac_complete;
-    ++rx_stats[pipe].afe_compl;
+    rx_qec_correction(adc->channel, completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
 
-    // read once, the host may write the config at any time
-    const vspa_channel_config_t *const cfg = rx_pipe_cfg(pipe);
-    const uint16_t exponent = cfg->oversample_exponent;
-    const uint16_t clock_divider_disabled = cfg->clock_divider_disabled;
-
-    const uint64_t buffer_time = adc->phyticks;
-    adc->phyticks += (AXIQ_XFER_SAMPLES_COUNT >> clock_divider_disabled);
-
-    // work
-    rx_pipeline_t *const rx = &rx_pipe[pipe];
-    ddr_pipeline_t *const ddr = &rx_ddr[pipe];
-    decimation_pipeline_t *const dec = &dec_pipe[pipe];
-    cfixed16_t *const dest = ddr_next_enq_buffer(ddr);
-    TRACE_START_DURATION(t2);
-    if (dec->samples_produced == 0) {
-        rx->buf_timestamp = phyticks_to_ts(buffer_time, exponent, clock_divider_disabled);
-    }
-    rx_qec_correction(rx_adc[pipe].channel, completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
-
-    cfixed16_t *buffer_to_scale;
-    if (exponent) {
-        // in place processing
-        decimate_work(dec, exponent, dest + dec->samples_produced, completed_buffer, ADC_XFER_SAMPLE_COUNT);
-        buffer_to_scale = dest;
-    } else {
-        dec->samples_produced = DDR_XFER_SAMPLE_COUNT;
-        buffer_to_scale = completed_buffer;
-    }
-    TRACE_DURATION(T_RX_WORK, DEFAULT_THREAD_ID, t2);
-    if (dec->samples_produced >= DDR_XFER_SAMPLE_COUNT) {
-        rhf_rhf_rsp_vMultiSclr_asm(dest, buffer_to_scale, &downscalefactor[pipe], DDR_XFER_SIZE_BYTES / DMEM_LINE_SIZE_BYTES);
-        if (dmac_is_complete(1 << ddr->dma_channel))
-            rx_ddr_dma_complete(pipe);
-        rx_lane_try_ddr_enqueue(pipe, dest, rx->buf_timestamp);
-        decimate_output_consume(dec);
+    switch (rx_pipe[pipe].work_path) {
+    case RX_WORK_DFT:
+        rx_work_to_dft(pipe, completed_buffer);
+        break;
+    case RX_WORK_DDR:
+    default:
+        rx_work_to_ddr(pipe, completed_buffer, buffer_time);
+        break;
     }
 
     // ADC self perpetuating, reenque new tranfer on each completion
@@ -368,9 +416,8 @@ void adc_dma_complete(uint16_t pipe) {
                 VCPU_ADDR_FOR_DMA(completed_buffer) // dmem addr
     );
     TRACE_DMA_BEGIN(afe_dma_channel(afe), afe->count_dmac_enque & 1);
-    ++rx_stats[pipe].afe_enq;
     ++afe->count_dmac_enque;
-    TRACE_DURATION(T_ADC_COMPLETE, DEFAULT_THREAD_ID, t1);
+    ++rx_stats[pipe].afe_enq;
 }
 
 void rx_ddr_dma_complete(uint16_t pipe) {
@@ -413,8 +460,10 @@ void rx_lane_prime(uint16_t pipe) {
 
 // Stream start raises all Rx lanes rx_allowed at stream_origin_phyticks
 void rx_stream_started(void) {
-    for (int pipe = 0; pipe < RX_PIPE_COUNT; ++pipe)
+    for (int pipe = 0; pipe < RX_PIPE_COUNT; ++pipe) {
         rx_adc[pipe].sampling = true;
+        rx_pipe[pipe].work_path = RX_WORK_DDR;
+    }
 }
 
 void rx_lane_stop(uint16_t pipe) {
@@ -422,68 +471,29 @@ void rx_lane_stop(uint16_t pipe) {
     rx_adc[pipe].sampling = false;
 }
 
-extern void ProcessTxDMA(void);
+int rx_dft_start(e_rx_channel channel, int32_t fcw) {
+    if (channel > VSPA_RX1)
+        return lime_Result_InvalidValue;
 
-// Host reads the combined value of nco_hann_combine()
-static nco_correlator_t hann_terms[NCO_HANN_TERMS];
-cfloat32_t hann_sum;
+    rx_dft.channel = channel;
+    rx_dft.fcw = fcw;
 
-cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw) {
-    uint16_t pipe = 0;
-    tx_tone_flush(0); // don't measure samples generated before the latest Tx QEC/tone change
-    rx_select_channel(pipe, channel);
-
-    ProcessTxDMA(); // for Tx tone generation
+    const uint16_t pipe = 0;
+    rx_pipe[pipe].work_path = RX_WORK_DFT;
+    rx_select_channel(pipe, (e_rx_channel)rx_dft.channel);
     rx_lane_prime(pipe);
-    ProcessTxDMA(); // for Tx tone generation
+
     afe_pipeline_t *const afe = &rx_adc[pipe].afe;
-    const axiq_config_t *const axiq = afe->config;
     initial_adc_enq(afe);
-    timer_trig_immediate_async(axiq->phytimer_id, ePhyTimerComparatorOut1); // rx_allowed of the measured channel
 
-    const uint16_t fft_size = ADC_XFER_SAMPLE_COUNT;
-    const uint16_t dma_mask = (1 << axiq->dma_channel);
+    // give Rx enough delay, so that Tx samples would be transmitted with updated QEC values
+    timer_trig_schedule_async(afe->config->phytimer_id, ePhyTimerComparatorOut1, phytime_now() + (2 * ADC_XFER_SAMPLE_COUNT + 128));
 
-    ProcessTxDMA(); // for Tx tone generation
-    const uint16_t samples_per_loop = ADC_XFER_SAMPLE_COUNT;
-
-    fcw >>= rx_channel_cfg[channel].oversample_exponent; // adjust for host side expected sample rate
-    const uint32_t hann_bin_fcw = (0x80000000u / (fft_size >> 1)); // frequency offset of 1 DFT bin
+    rx_dft.fcw >>= rx_channel_cfg[rx_dft.channel].oversample_exponent; // adjust for host side expected sample rate
+    rx_dft.buffers_left = RX_DFT_BUFFER_COUNT;
     memset16(hann_terms, 0, sizeof(hann_terms));
 
-    for (uint16_t i = 0; i < fft_size / samples_per_loop; ++i) {
-        volatile int16_t timeout = 2000;
-        while (!dmac_is_complete(dma_mask) && --timeout) {
-            ProcessTxDMA();
-        }
-        if (timeout == 0)
-            break;
-
-        axiq_fifo_errors(afe);
-        dmac_clear_complete(dma_mask);
-
-        cfixed16_t *const completed_buffer = afe_next_complete_buffer(afe);
-        ++afe->count_dmac_complete;
-
-        // work
-        rx_qec_correction(rx_adc[pipe].channel, completed_buffer, completed_buffer, ADC_DMEM_LINES_COUNT);
-        nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw, &hann_terms[0]);
-        nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw - hann_bin_fcw, &hann_terms[1]);
-        nco_correlate(completed_buffer, ADC_DMEM_LINES_COUNT, fcw + hann_bin_fcw, &hann_terms[2]);
-
-        const axiq_config_t *const axiq = afe->config;
-        dmac_enable(axiq->dmac_ctrl_flags | DMAC_PEND_EXT, // flags
-                    ADC_XFER_SIZE_BYTES, // size
-                    axiq->axi_fifo_addr, // axi addr
-                    VCPU_ADDR_FOR_DMA(completed_buffer) // dmem addr
-        );
-        ++afe->count_dmac_enque;
-    }
-    rx_lane_stop(pipe);
-
-    nco_hann_combine(hann_terms, &hann_sum);
-
-    return &hann_sum;
+    return lime_Result_Success;
 }
 
 // On first TCD enqueues initial DMA transfers for further self triggering

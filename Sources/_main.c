@@ -24,12 +24,43 @@
 #include "proxy_data.h"
 
 extern const vspa_feature_t features_map[];
-extern void HandleCommandFlags(void);
 extern void proxy_post(void);
 
 struct VSPA_Stats vspa_core_stats;
 
-static inline void HostMBox0Post(uint64_t msg64) { host_mbox0_post(msg64); }
+static inline void MBoxPost(int16_t mbox, uint64_t msg64) {
+    // if (mbox == 0)
+    //     host_mbox0_post(msg64);
+    // else
+    //     host_mbox1_post(msg64);
+    iowr64(VCPU_OUT_0_MSB + mbox * 8, msg64);
+}
+
+static void HandleCommandFlags(void) {
+    uint32_t flags = iord(HOST_VCPU_FLAGS0);
+    for (int lane = 0; lane < RX_PIPE_COUNT; ++lane) {
+        if (flags & (HTV_SIGNAL_RXLANE0_ABORT << lane))
+            rx_lane_stop(lane);
+        if (flags & (HTV_SIGNAL_RXLANE0_PRIME << lane))
+            rx_lane_prime(lane);
+
+        if (flags & rx_hdma[lane].htv_tcd_pending_flag_mask) {
+            host_submitted_rx_tcd(lane);
+        }
+    }
+    for (int lane = 0; lane < TX_PIPE_COUNT; ++lane) {
+        if (flags & (HTV_SIGNAL_TXLANE0_ABORT << lane))
+            tx_lane_abort(lane);
+        if (flags & (HTV_SIGNAL_TXLANE0_PRIME << lane))
+            tx_lane_prime(lane);
+
+        if (flags & tx_hdma[lane].htv_tcd_pending_flag_mask) {
+            host_submitted_tx_tcd(lane);
+        }
+    }
+
+    clear_htv_signal(flags); // clear processed flags
+}
 
 static void clean_state(void) {
     // enter DMA flush
@@ -83,7 +114,7 @@ static void clean_state(void) {
 }
 
 static inline __attribute__((noreturn)) void SwReset(void) __noreturn {
-    HostMBox0Post(MAKEDWORD(0x0, 0x1));
+    host_mbox0_post(MAKEDWORD(0x0, 0x1));
     clean_state();
     __fnop();
     __fnop();
@@ -103,7 +134,7 @@ static inline void stream_start_now(uint32_t phytime, bool specific_time) {
     rx_stream_started();
 }
 
-uint64_t HandleCommand(uint64_t msg64) {
+void HandleCommand(uint64_t msg64, int16_t mbox) {
     const mbox_opc_e op_code = (mbox_opc_e)((HIWORD(msg64) & 0xFF000000) >> 24);
     const uint32_t msg_msb = HIWORD(msg64);
     const uint32_t msg_lsb = LOWORD(msg64);
@@ -112,25 +143,26 @@ uint64_t HandleCommand(uint64_t msg64) {
     case MBOX_OPC_RX_CHAN_SELECT: {
         const uint8_t lane = msg_lsb & 0xFF;
         const uint8_t channel = (msg_lsb >> 8) & 0xFF;
-        return (MAKEDWORD(0, rx_select_channel(lane, (e_rx_channel)channel)));
+        msg64 = (MAKEDWORD(0, rx_select_channel(lane, (e_rx_channel)channel)));
         break;
     }
     case MBOX_OPC_TX_CHAN_SELECT: {
         const uint8_t pipe = msg_lsb & 0xFF;
         const uint8_t channel = (msg_lsb >> 8) & 0xFF;
-        return (MAKEDWORD(0, tx_select_channel(pipe, (e_tx_channel)channel)));
+        msg64 = (MAKEDWORD(0, tx_select_channel(pipe, (e_tx_channel)channel)));
+        break;
     }
     case MBOX_OPC_SET_SAMPLE_FORMAT: {
         const uint8_t lane = msg_lsb & 0xFF;
         const iq_sample_format_e format = (iq_sample_format_e)((msg_lsb >> 8) & 0xFF);
         const bool tx = msg_lsb & (1 << 16);
-        return (MAKEDWORD(0, tx ? tx_set_sample_format(lane, format) : rx_set_sample_format(lane, format)));
+        msg64 = (MAKEDWORD(0, tx ? tx_set_sample_format(lane, format) : rx_set_sample_format(lane, format)));
         break;
     }
     case MBOX_OPC_SINGLE_TONE_TX: {
         const uint8_t lane = msg_lsb & 0xFF;
         const bool enable = msg_lsb & (1 << 16);
-        return (MAKEDWORD(0, tx_tone_enable(lane, enable)));
+        msg64 = (MAKEDWORD(0, tx_tone_enable(lane, enable)));
         break;
     }
     case MBOX_OPC_DONE_SWRESET:
@@ -138,47 +170,51 @@ uint64_t HandleCommand(uint64_t msg64) {
         break;
 
     case MBOX_OPC_GET_FEATURES_MAP: {
-        return (MAKEDWORD(ADDR8(features_map), lime_Result_Success));
+        msg64 = (MAKEDWORD(ADDR8(features_map), lime_Result_Success));
+        break;
     }
     case MBOX_OPC_RX_FFT: {
         const uint32_t freq_ctrl_word = msg_lsb;
         const uint16_t channel = msg_msb & 0x3;
-        const cfloat32_t *const result = rx_dft_measure((e_rx_channel)channel, freq_ctrl_word);
-        return (MAKEDWORD(ADDR8(*result), lime_Result_Success)); // ADDR8 takes the address of its operand
+        const int status = rx_dft_start((e_rx_channel)channel, freq_ctrl_word);
+        if (status != lime_Result_Success)
+            msg64 = (MAKEDWORD(0, (uint32_t)status));
+        return;
     }
     case MBOX_OPC_STREAM_START: {
         const uint32_t phytime = msg_lsb;
         const bool specific_time = msg_msb & 0x1;
         stream_start_now(phytime, specific_time);
-        return (MAKEDWORD(0, lime_Result_Success));
+        msg64 = (MAKEDWORD(0, lime_Result_Success));
+        break;
     }
     case MBOX_OPC_TRACE_RESET: {
         l1_trace_clear();
         TRACE_EVENT(T_TRACE_PUSH, DEFAULT_THREAD_ID, 0);
-        return (MAKEDWORD(0, lime_Result_Success));
+        msg64 = (MAKEDWORD(0, lime_Result_Success));
+        break;
     }
     case MBOX_OPC_PROXY_OFFSET: {
-        return (MAKEDWORD(0, proxy_set_address(msg_lsb)));
+        msg64 = (MAKEDWORD(0, proxy_set_address(msg_lsb)));
+        break;
     }
 
     default:
         // not a valid command, NACK
-        return (MAKEDWORD(op_code, lime_Result_InvalidValue));
+        msg64 = (MAKEDWORD(op_code, lime_Result_InvalidValue));
         break;
     }
-    return lime_Result_Error;
+    MBoxPost(mbox, msg64);
 }
 
 static inline void ProcessMBox(void) {
     if (vspa_mbox0_is_valid()) // message from Host
     {
-        const uint64_t cmd = host_mbox0_read();
-        host_mbox0_post(HandleCommand(cmd));
+        HandleCommand(host_mbox0_read(), 0);
     }
     if (vspa_mbox1_is_valid()) // message from Arm M4
     {
-        const uint64_t cmd = host_mbox1_read();
-        host_mbox1_post(HandleCommand(cmd));
+        HandleCommand(host_mbox1_read(), 1);
     }
 }
 
@@ -230,7 +266,7 @@ __attribute__((noreturn)) void main_go(void) {
 
         for (int lane = 0; lane < RX_PIPE_COUNT; ++lane) {
             if (dmac_event(1 << afe_dma_channel(&rx_adc[lane].afe)))
-                adc_dma_complete(lane);
+                rx_pipe_process(lane);
         }
     }
 

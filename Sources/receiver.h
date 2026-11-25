@@ -22,9 +22,12 @@ typedef enum {
     VSPA_RX1,
 } e_rx_channel;
 
+typedef enum { RX_WORK_DDR, RX_WORK_DFT } rx_work_path_t;
+
 typedef struct RxDDR_lane {
     dma_tcd_t *wip_tcd_output; // back of rx_output_blocks[pipe], being filled
     uint64_t buf_timestamp; // timestamp of the first sample in the DDR transfer buffer being filled
+    rx_work_path_t work_path;
 } rx_pipeline_t;
 
 typedef struct ADC_lane {
@@ -50,10 +53,14 @@ void rx_lane_prime(uint16_t lane);
 void rx_lane_stop(uint16_t lane);
 void rx_stream_started(void);
 
-void adc_dma_complete(uint16_t lane);
 void rx_ddr_dma_complete(uint16_t lane);
 
-cfloat32_t *rx_dft_measure(e_rx_channel channel, int32_t fcw);
+// DFT measurement of a single frequency on an Rx channel, done on pipe 0 over several GO events.
+// @param fcw frequency control word, frequency / 2^32 as a fraction of the host side sample rate
+int rx_dft_start(e_rx_channel channel, int32_t fcw);
+
 void host_submitted_rx_tcd(uint16_t lane);
+
+void rx_pipe_process(uint16_t pipe);
 
 #endif /* IQMOS_RX_H_ */

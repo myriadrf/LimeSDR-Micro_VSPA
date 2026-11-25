@@ -54,6 +54,11 @@
 // VSPA addresses in half words (16bits), DMA uses bytes (8bits)
 #define VCPU_ADDR_FOR_DMA(x) (((uint32_t)x) << 1)
 
-void dma_clear_all_bits(uint32_t mask);
+static void dma_clear_all_bits(uint32_t mask) {
+    dmac_clear_complete(mask);
+    dmac_clear_event(mask);
+    dmac_clear_errxfr(mask);
+    dmac_clear_errcfg(mask);
+}
 
 #endif // DMA_COMMON_H

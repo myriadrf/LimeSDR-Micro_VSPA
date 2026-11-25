@@ -17,9 +17,7 @@ set(COMMON_IQPLAYER_SOURCE
     l1-trace.c
     receiver.c
     transmitter.c
-    dma_common.c
     vspa_memorymap.c
-    iqstream_signals.c
     phytimer.c
     proxy_data.c
     tdd.c

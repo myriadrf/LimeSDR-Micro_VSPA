@@ -745,21 +745,6 @@ int tx_tone_enable(uint16_t pipe, bool enable) {
     return 0;
 }
 
-extern void ProcessTxDMA(void);
-
-// Tone buffers get QEC applied when generated, and up to MAX_DMA_ENQ of them are queued ahead of the DAC.
-// Wait until the buffers queued before this call (+1 for the AXIQ FIFO contents) have been sent, so that the
-// DAC output reflects the current tone and Tx QEC settings.
-void tx_tone_flush(uint16_t pipe) {
-    if (!tx_pipe[pipe].generate_tone)
-        return;
-    const afe_pipeline_t *const afe = &tx_dac[pipe].afe;
-    const uint32_t target = afe->count_dmac_complete + MAX_DMA_ENQ + 1;
-    volatile int32_t timeout = 2000 * (MAX_DMA_ENQ + 1);
-    while ((int32_t)(target - afe->count_dmac_complete) > 0 && --timeout)
-        ProcessTxDMA();
-}
-
 void host_submitted_tx_tcd(uint16_t pipe) {
     if (ddr_tx_buffers_in_use(&tx_ddr[pipe].ddr) >= tx_ddr[pipe].ring_len)
         return; // skip, all ddr buffers are in use
